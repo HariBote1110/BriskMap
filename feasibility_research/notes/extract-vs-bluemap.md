@@ -28,6 +28,8 @@ cd /opt/bench/brisk
 /usr/bin/time -v java -jar brisk-extract.jar --in /opt/bench/worlds/base/region --out <dir> --threads 6 --caves keep|hide
 ```
 
+brisk-extract の 5 回×2 条件の測定は `tools/bench/run-extract.sh`（コンテナ上の `/opt/bench/brisk/run.sh` と同一）で実行した。
+
 ## 結果
 
 測定日: 2026-09-28。ページキャッシュは温めた状態。
