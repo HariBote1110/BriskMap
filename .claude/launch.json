@@ -4,8 +4,28 @@
     {
       "name": "mesher-bench",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["feasibility_research/tools/mesher/bench/serve.mjs", "--data", "feasibility_research/output/real/hide-surface", "--port", "8787"],
+      "runtimeArgs": [
+        "feasibility_research/tools/mesher/bench/serve.mjs",
+        "--data",
+        "feasibility_research/output/real/hide-surface",
+        "--port",
+        "8787"
+      ],
       "port": 8787
+    },
+    {
+      "name": "viewer",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "feasibility_research/tools/viewer/serve.mjs",
+        "--root",
+        "feasibility_research/tools",
+        "--data",
+        "feasibility_research/output/real/hide-surface",
+        "--port",
+        "8200"
+      ],
+      "port": 8200
     }
   ]
 }
