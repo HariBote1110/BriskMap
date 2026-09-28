@@ -5,7 +5,8 @@ import java.util.Arrays;
 public final class Extractor {
     public static final short EMPTY_Y = Short.MIN_VALUE;
     private static final String[] NON_OCCLUDING = {
-        "water", "lava", "glass", "leaves", "slab", "stairs", "fence", "wall", "pane", "door", "trapdoor", "torch", "sign", "carpet", "rail", "button", "pressure_plate", "flower", "sapling", "grass", "fern", "vine", "kelp", "seagrass", "sugar_cane", "bamboo", "mushroom", "snow", "lantern", "chain", "ladder", "banner", "bed", "candle", "azalea", "dripleaf", "lichen", "roots", "sprouts", "coral", "wheat", "carrots", "potatoes", "beetroots", "cactus", "cobweb", "bars", "scaffolding", "pointed_dripstone", "amethyst_cluster", "bud", "head", "skull", "pot", "anvil", "bell", "lectern", "grindstone", "stonecutter", "campfire", "chest", "hopper", "brewing_stand", "cauldron", "composter", "end_rod", "lightning_rod", "powder_snow"
+        "water", "lava", "glass", "leaves", "slab", "stairs", "fence", "wall", "pane", "door", "trapdoor", "torch", "sign", "carpet", "rail", "button", "pressure_plate", "flower", "sapling", "grass", "fern", "vine", "kelp", "seagrass", "sugar_cane", "bamboo", "mushroom", "snow", "lantern", "chain", "ladder", "banner", "bed", "candle", "azalea", "dripleaf", "lichen", "roots", "sprouts", "coral", "wheat", "carrots", "potatoes", "beetroots", "cactus", "cobweb", "bars", "scaffolding", "pointed_dripstone", "amethyst_cluster", "bud", "head", "skull", "pot", "anvil", "bell", "lectern", "grindstone", "stonecutter", "campfire", "chest", "hopper", "brewing_stand", "cauldron", "composter", "end_rod", "lightning_rod", "powder_snow",
+        "dandelion", "poppy", "orchid", "allium", "azure_bluet", "tulip", "oxeye_daisy", "cornflower", "lily_of_the_valley", "wither_rose", "sunflower", "lilac", "rose_bush", "peony", "torchflower", "pitcher_plant", "pitcher_crop", "pink_petals", "bush", "leaf_litter", "wildflowers", "lily_pad", "hanging_roots", "spore_blossom", "cave_vines", "cave_vines_plant", "twisting_vines", "weeping_vines", "fungus", "pickle", "frogspawn", "eyeblossom", "dry_grass", "cactus_flower", "potted", "sweet_berry_bush", "nether_wart", "cocoa", "melon_stem", "pumpkin_stem", "attached_melon_stem", "attached_pumpkin_stem", "tripwire", "redstone_wire", "repeater", "comparator", "lever", "conduit", "heavy_core", "decorated_pot", "sniffer_egg", "turtle_egg", "sea_pickle", "big_dripleaf", "small_dripleaf", "bubble_column", "structure_void", "light", "barrier"
     };
 
     private Extractor() {}
@@ -20,9 +21,19 @@ public final class Extractor {
         String block = name(state);
         if (!block.startsWith("minecraft:")) return true;
         String path = block.substring(10);
-        if (path.equals("grass_block") || path.endsWith("mushroom_block") || path.equals("snow_block") || path.endsWith("coral_block")) return true;
-        for (String part : NON_OCCLUDING) if (path.contains(part)) return false;
+        if (path.equals("grass_block") || path.equals("snow_block") || path.endsWith("mushroom_block") || path.equals("mushroom_stem") || path.endsWith("coral_block") || path.endsWith("command_block") || path.equals("bedrock")) return true;
+        for (String part : NON_OCCLUDING) {
+            if (part.equals("potted") ? path.startsWith("potted_") : matchesToken(path, part)) return false;
+        }
         return true;
+    }
+
+    private static boolean matchesToken(String path, String word) {
+        return path.equals(word) || path.startsWith(word + "_") || path.endsWith("_" + word) || path.contains("_" + word + "_");
+    }
+
+    static boolean occludes(int block, boolean[] occluding, int[] floor, int x, int z, int y, boolean hideCaves) {
+        return occluding[block] || hideCaves && y < 55 && y < floor[z * 16 + x] - 65;
     }
 
     public static Extracted2d extract2d(Chunk chunk, Palette blocks, Palette biomes) {
@@ -73,7 +84,7 @@ public final class Extractor {
         return all;
     }
 
-    public static Extracted3d extract3d(Chunk chunk, Palette palette) {
+    public static Extracted3d extract3d(Chunk chunk, Palette palette, BorderCache borders, int index, boolean hideCaves) {
         int[][] all = decodeBlocks(chunk, palette);
         boolean[] occluding = new boolean[palette.size()];
         boolean[] air = new boolean[palette.size()];
@@ -91,12 +102,15 @@ public final class Extractor {
                 result.nonair++;
                 int y = p >>> 8, z = (p >>> 4) & 15, x = p & 15;
                 if (solidSingle && x > 0 && x < 15 && z > 0 && z < 15 && y > 0 && y < 15) continue;
-                if (x == 0 || x == 15 || z == 0 || z == 15 ||
-                    y == 0 && (sy == 0 || !occluding[all[sy - 1][p + 3840]]) ||
-                    y == 15 && (sy == 23 || !occluding[all[sy + 1][p - 3840]]) ||
-                    x > 0 && !occluding[all[sy][p - 1]] || x < 15 && !occluding[all[sy][p + 1]] ||
-                    z > 0 && !occluding[all[sy][p - 16]] || z < 15 && !occluding[all[sy][p + 16]] ||
-                    y > 0 && !occluding[all[sy][p - 256]] || y < 15 && !occluding[all[sy][p + 256]]) {
+                int worldY = sy * 16 + y - 64;
+                int fullY = sy * 16 + y;
+                boolean west = x == 0 ? borders.neighbourOccludes(index, BorderCache.WEST, fullY, z) : occludes(all[sy][p - 1], occluding, chunk.oceanFloor, x - 1, z, worldY, hideCaves);
+                boolean east = x == 15 ? borders.neighbourOccludes(index, BorderCache.EAST, fullY, z) : occludes(all[sy][p + 1], occluding, chunk.oceanFloor, x + 1, z, worldY, hideCaves);
+                boolean north = z == 0 ? borders.neighbourOccludes(index, BorderCache.NORTH, fullY, x) : occludes(all[sy][p - 16], occluding, chunk.oceanFloor, x, z - 1, worldY, hideCaves);
+                boolean south = z == 15 ? borders.neighbourOccludes(index, BorderCache.SOUTH, fullY, x) : occludes(all[sy][p + 16], occluding, chunk.oceanFloor, x, z + 1, worldY, hideCaves);
+                boolean below = fullY == 0 ? false : y == 0 ? occludes(all[sy - 1][p + 3840], occluding, chunk.oceanFloor, x, z, worldY - 1, hideCaves) : occludes(all[sy][p - 256], occluding, chunk.oceanFloor, x, z, worldY - 1, hideCaves);
+                boolean above = fullY == 383 ? false : y == 15 ? occludes(all[sy + 1][p - 3840], occluding, chunk.oceanFloor, x, z, worldY + 1, hideCaves) : occludes(all[sy][p + 256], occluding, chunk.oceanFloor, x, z, worldY + 1, hideCaves);
+                if (!west || !east || !north || !south || !below || !above) {
                     positions[count] = p; blocks[count] = block; count++;
                 }
             }

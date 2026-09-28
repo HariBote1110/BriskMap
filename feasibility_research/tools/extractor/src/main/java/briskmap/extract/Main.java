@@ -26,7 +26,7 @@ public final class Main {
             return;
         }
         Path input = null, output = null;
-        String mode = "both";
+        String mode = "both", caves = "keep";
         int threads = Runtime.getRuntime().availableProcessors(), level = 6, limit = Integer.MAX_VALUE;
         for (int i = 0; i < args.length; i++) {
             if (i + 1 >= args.length) throw new IllegalArgumentException("Missing value for " + args[i]);
@@ -35,14 +35,16 @@ public final class Main {
                 case "--in" -> input = Path.of(value);
                 case "--out" -> output = Path.of(value);
                 case "--mode" -> mode = value;
+                case "--caves" -> caves = value;
                 case "--threads" -> threads = Integer.parseInt(value);
                 case "--level" -> level = Integer.parseInt(value);
                 case "--limit-regions" -> limit = Integer.parseInt(value);
                 default -> throw new IllegalArgumentException("Unknown option " + args[i - 1]);
             }
         }
-        if (input == null || output == null || !(mode.equals("both") || mode.equals("2d") || mode.equals("3d")) || threads < 1 || level < 0 || level > 9 || limit < 1) throw new IllegalArgumentException("Usage: --in DIR --out DIR [--mode 2d|3d|both] [--threads N] [--level 0-9] [--limit-regions N]");
+        if (input == null || output == null || !(mode.equals("both") || mode.equals("2d") || mode.equals("3d")) || !(caves.equals("keep") || caves.equals("hide")) || threads < 1 || level < 0 || level > 9 || limit < 1) throw new IllegalArgumentException("Usage: --in DIR --out DIR [--mode 2d|3d|both] [--caves keep|hide] [--threads N] [--level 0-9] [--limit-regions N]");
         final boolean do2d = !mode.equals("3d"), do3d = !mode.equals("2d");
+        final boolean hideCaves = caves.equals("hide");
         final Path outDir = output;
         final int compressionLevel = level;
         List<Path> paths = new ArrayList<>();
@@ -51,15 +53,16 @@ public final class Main {
         var pool = Executors.newFixedThreadPool(threads);
         List<Future<Metrics>> results = new ArrayList<>();
         try {
-            for (Path path : paths) results.add(pool.submit((Callable<Metrics>)() -> process(path, outDir, do2d, do3d, compressionLevel)));
+            for (Path path : paths) results.add(pool.submit((Callable<Metrics>)() -> process(path, outDir, do2d, do3d, hideCaves, compressionLevel)));
             Metrics sum = new Metrics();
             for (Future<Metrics> result : results) sum.add(result.get());
             sum.wallMs = (System.nanoTime() - start) / 1_000_000;
+            sum.caves = caves;
             System.out.println(sum.json());
         } finally { pool.shutdownNow(); }
     }
 
-    private static Metrics process(Path path, Path outDir, boolean do2d, boolean do3d, int level) throws Exception {
+    private static Metrics process(Path path, Path outDir, boolean do2d, boolean do3d, boolean hideCaves, int level) throws Exception {
         Metrics metrics = new Metrics(); metrics.regions = 1;
         long tick = Clock.now();
         Region region = new Region(path);
@@ -71,6 +74,17 @@ public final class Main {
         Palette blocks = new Palette(), biomes = new Palette();
         byte[][] two = do2d ? new byte[1024][] : null, three = do3d ? new byte[1024][] : null;
         Inflater inflater = INFLATER.get();
+        BorderCache borders = null;
+        if (do3d) {
+            tick = Clock.now();
+            borders = new BorderCache();
+            Palette borderPalette = new Palette();
+            for (int i = 0; i < 1024; i++) {
+                try { borders.put(i, region.read(i, inflater), borderPalette, hideCaves); }
+                catch (Region.UnsupportedChunkException ex) { /* The second pass counts unsupported chunks. */ }
+            }
+            metrics.borderPassNs = Clock.now() - tick;
+        }
         for (int i = 0; i < 1024; i++) {
             Chunk chunk;
             try { chunk = region.read(i, inflater); }
@@ -88,7 +102,7 @@ public final class Main {
             }
             if (do3d) {
                 tick = Clock.now();
-                Extracted3d shell = Extractor.extract3d(chunk, blocks);
+                Extracted3d shell = Extractor.extract3d(chunk, blocks, borders, i, hideCaves);
                 three[i] = Format.encode3d(shell);
                 metrics.extract3dNs += Clock.now() - tick;
                 metrics.shellBlocks += shell.count(); metrics.blocksNonair += shell.nonair;
@@ -108,18 +122,19 @@ public final class Main {
     }
 
     private static final class Metrics {
+        String caves = "keep";
         long regions, chunksTotal, chunksExtracted, skippedNotFull, skippedUnsupported, inputBytes, outputBytes2d, outputBytes3d, outputFiles, wallMs;
-        long readNs, inflateNs, parseNs, extract2dNs, extract3dNs, compressNs, writeNs, shellBlocks, blocksNonair;
+        long readNs, borderPassNs, inflateNs, parseNs, extract2dNs, extract3dNs, compressNs, writeNs, shellBlocks, blocksNonair;
         void add(Metrics m) {
             regions += m.regions; chunksTotal += m.chunksTotal; chunksExtracted += m.chunksExtracted; skippedNotFull += m.skippedNotFull; skippedUnsupported += m.skippedUnsupported;
             inputBytes += m.inputBytes; outputBytes2d += m.outputBytes2d; outputBytes3d += m.outputBytes3d; outputFiles += m.outputFiles;
-            readNs += m.readNs; inflateNs += m.inflateNs; parseNs += m.parseNs; extract2dNs += m.extract2dNs; extract3dNs += m.extract3dNs; compressNs += m.compressNs; writeNs += m.writeNs; shellBlocks += m.shellBlocks; blocksNonair += m.blocksNonair;
+            readNs += m.readNs; borderPassNs += m.borderPassNs; inflateNs += m.inflateNs; parseNs += m.parseNs; extract2dNs += m.extract2dNs; extract3dNs += m.extract3dNs; compressNs += m.compressNs; writeNs += m.writeNs; shellBlocks += m.shellBlocks; blocksNonair += m.blocksNonair;
         }
         String json() {
-            return "{\"regions\":" + regions + ",\"chunks_total\":" + chunksTotal + ",\"chunks_extracted\":" + chunksExtracted +
+            return "{\"caves\":\"" + caves + "\",\"regions\":" + regions + ",\"chunks_total\":" + chunksTotal + ",\"chunks_extracted\":" + chunksExtracted +
                 ",\"chunks_skipped_not_full\":" + skippedNotFull + ",\"chunks_skipped_unsupported\":" + skippedUnsupported +
                 ",\"input_bytes\":" + inputBytes + ",\"output_bytes_2d\":" + outputBytes2d + ",\"output_bytes_3d\":" + outputBytes3d +
-                ",\"output_files\":" + outputFiles + ",\"wall_ms\":" + wallMs + ",\"read_ms\":" + readNs / 1_000_000 +
+                ",\"output_files\":" + outputFiles + ",\"wall_ms\":" + wallMs + ",\"read_ms\":" + readNs / 1_000_000 + ",\"border_pass_ms\":" + borderPassNs / 1_000_000 +
                 ",\"inflate_ms\":" + inflateNs / 1_000_000 + ",\"parse_ms\":" + parseNs / 1_000_000 +
                 ",\"extract_2d_ms\":" + extract2dNs / 1_000_000 + ",\"extract_3d_ms\":" + extract3dNs / 1_000_000 +
                 ",\"compress_ms\":" + compressNs / 1_000_000 + ",\"write_ms\":" + writeNs / 1_000_000 +
