@@ -1,0 +1,4 @@
+external/
+worlds/
+output/
+*.jar
