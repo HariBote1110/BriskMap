@@ -33,6 +33,11 @@ public final class Format {
     }
 
     public static byte[] encode3d(Extracted3d shell) throws IOException {
+        return encode3d(shell, 1);
+    }
+
+    public static byte[] encode3d(Extracted3d shell, int version) throws IOException {
+        if (version != 1 && version != 2) throw new IllegalArgumentException("Unsupported format version " + version);
         Encoder encoder = ENCODER.get();
         encoder.bytes.reset();
         DataOutputStream out = encoder.out;
@@ -41,6 +46,13 @@ public final class Format {
             int previous = 0;
             for (int position : shell.positions[sy]) { varint(out, position - previous); previous = position; }
             for (int block : shell.blocks[sy]) varint(out, block);
+            if (version == 2) {
+                if (shell.masks[sy].length != shell.positions[sy].length) throw new IllegalArgumentException("Missing face masks");
+                for (byte mask : shell.masks[sy]) {
+                    if (mask == 0 || (mask & 0xc0) != 0) throw new IllegalArgumentException("Invalid face mask");
+                    out.writeByte(mask);
+                }
+            }
         }
         return encoder.bytes.toByteArray();
     }
@@ -55,6 +67,11 @@ public final class Format {
     }
 
     public static WriteResult write(Path path, int kind, int regionX, int regionZ, Palette blocks, Palette biomes, byte[][] payloads, Deflater deflater) throws IOException {
+        return write(path, 1, kind, regionX, regionZ, blocks, biomes, payloads, deflater);
+    }
+
+    public static WriteResult write(Path path, int version, int kind, int regionX, int regionZ, Palette blocks, Palette biomes, byte[][] payloads, Deflater deflater) throws IOException {
+        if (version != 1 && version != 2 || kind == 1 && version != 1) throw new IllegalArgumentException("Unsupported format version");
         WriteResult result = new WriteResult();
         byte[][] compressed = new byte[1024][];
         byte[] buffer = COMPRESS_BUFFER.get();
@@ -73,7 +90,7 @@ public final class Format {
         ByteArrayOutputStream header = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(header);
         out.write(new byte[]{'B', 'R', 'S', 'K'});
-        out.writeByte(1); out.writeByte(kind); out.writeInt(regionX); out.writeInt(regionZ);
+        out.writeByte(version); out.writeByte(kind); out.writeInt(regionX); out.writeInt(regionZ);
         table(out, blocks);
         if (kind == 1) table(out, biomes);
         int payloadStart = header.size() + 8192;

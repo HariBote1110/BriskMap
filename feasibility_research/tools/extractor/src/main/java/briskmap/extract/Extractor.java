@@ -16,6 +16,10 @@ public final class Extractor {
         return name.equals("minecraft:air") || name.equals("minecraft:cave_air") || name.equals("minecraft:void_air");
     }
     private static String name(String state) { int end = state.indexOf('['); return end < 0 ? state : state.substring(0, end); }
+    static byte fluid(String state) {
+        String block = name(state);
+        return (byte)(block.equals("minecraft:water") ? 1 : block.equals("minecraft:lava") ? 2 : 0);
+    }
     public static boolean isOccluding(String state) {
         if (isAir(state)) return false;
         String block = name(state);
@@ -34,6 +38,10 @@ public final class Extractor {
 
     static boolean occludes(int block, boolean[] occluding, int[] floor, int x, int z, int y, boolean hideCaves) {
         return occluding[block] || hideCaves && y < 55 && y < floor[z * 16 + x] - 65;
+    }
+
+    private static boolean occludes(int block, boolean[] occluding, byte[] fluids, byte fluid, int[] floor, int x, int z, int y, boolean hideCaves) {
+        return occludes(block, occluding, floor, x, z, y, hideCaves) || fluid != 0 && fluids[block] == fluid;
     }
 
     public static Extracted2d extract2d(Chunk chunk, Palette blocks, Palette biomes) {
@@ -85,15 +93,21 @@ public final class Extractor {
     }
 
     public static Extracted3d extract3d(Chunk chunk, Palette palette, BorderCache borders, int index, boolean hideCaves) {
+        return extract3d(chunk, palette, borders, index, hideCaves, false);
+    }
+
+    public static Extracted3d extract3d(Chunk chunk, Palette palette, BorderCache borders, int index, boolean hideCaves, boolean surfaceFluids) {
         int[][] all = decodeBlocks(chunk, palette);
         boolean[] occluding = new boolean[palette.size()];
         boolean[] air = new boolean[palette.size()];
-        for (int i = 0; i < palette.size(); i++) { String state = palette.get(i); occluding[i] = isOccluding(state); air[i] = isAir(state); }
+        byte[] fluids = new byte[palette.size()];
+        for (int i = 0; i < palette.size(); i++) { String state = palette.get(i); occluding[i] = isOccluding(state); air[i] = isAir(state); fluids[i] = fluid(state); }
         Extracted3d result = new Extracted3d();
         for (int sy = 0; sy < 24; sy++) {
             Section section = chunk.sections[sy];
             if (section == null || section.blocks == null || section.blocks.length == 1 && air[all[sy][0]]) continue;
             int[] positions = new int[4096], blocks = new int[4096];
+            byte[] masks = new byte[4096];
             int count = 0;
             boolean solidSingle = section.blocks.length == 1 && occluding[all[sy][0]];
             for (int p = 0; p < 4096; p++) {
@@ -104,18 +118,23 @@ public final class Extractor {
                 if (solidSingle && x > 0 && x < 15 && z > 0 && z < 15 && y > 0 && y < 15) continue;
                 int worldY = sy * 16 + y - 64;
                 int fullY = sy * 16 + y;
-                boolean west = x == 0 ? borders.neighbourOccludes(index, BorderCache.WEST, fullY, z) : occludes(all[sy][p - 1], occluding, chunk.oceanFloor, x - 1, z, worldY, hideCaves);
-                boolean east = x == 15 ? borders.neighbourOccludes(index, BorderCache.EAST, fullY, z) : occludes(all[sy][p + 1], occluding, chunk.oceanFloor, x + 1, z, worldY, hideCaves);
-                boolean north = z == 0 ? borders.neighbourOccludes(index, BorderCache.NORTH, fullY, x) : occludes(all[sy][p - 16], occluding, chunk.oceanFloor, x, z - 1, worldY, hideCaves);
-                boolean south = z == 15 ? borders.neighbourOccludes(index, BorderCache.SOUTH, fullY, x) : occludes(all[sy][p + 16], occluding, chunk.oceanFloor, x, z + 1, worldY, hideCaves);
-                boolean below = fullY == 0 ? false : y == 0 ? occludes(all[sy - 1][p + 3840], occluding, chunk.oceanFloor, x, z, worldY - 1, hideCaves) : occludes(all[sy][p - 256], occluding, chunk.oceanFloor, x, z, worldY - 1, hideCaves);
-                boolean above = fullY == 383 ? false : y == 15 ? occludes(all[sy + 1][p - 3840], occluding, chunk.oceanFloor, x, z, worldY + 1, hideCaves) : occludes(all[sy][p + 256], occluding, chunk.oceanFloor, x, z, worldY + 1, hideCaves);
-                if (!west || !east || !north || !south || !below || !above) {
-                    positions[count] = p; blocks[count] = block; count++;
+                byte currentFluid = surfaceFluids ? fluids[block] : 0;
+                boolean west = x == 0 ? borders.neighbourOccludes(index, BorderCache.WEST, fullY, z, currentFluid) : occludes(all[sy][p - 1], occluding, fluids, currentFluid, chunk.oceanFloor, x - 1, z, worldY, hideCaves);
+                boolean east = x == 15 ? borders.neighbourOccludes(index, BorderCache.EAST, fullY, z, currentFluid) : occludes(all[sy][p + 1], occluding, fluids, currentFluid, chunk.oceanFloor, x + 1, z, worldY, hideCaves);
+                boolean north = z == 0 ? borders.neighbourOccludes(index, BorderCache.NORTH, fullY, x, currentFluid) : occludes(all[sy][p - 16], occluding, fluids, currentFluid, chunk.oceanFloor, x, z - 1, worldY, hideCaves);
+                boolean south = z == 15 ? borders.neighbourOccludes(index, BorderCache.SOUTH, fullY, x, currentFluid) : occludes(all[sy][p + 16], occluding, fluids, currentFluid, chunk.oceanFloor, x, z + 1, worldY, hideCaves);
+                boolean below = fullY == 0 ? false : y == 0 ? occludes(all[sy - 1][p + 3840], occluding, fluids, currentFluid, chunk.oceanFloor, x, z, worldY - 1, hideCaves) : occludes(all[sy][p - 256], occluding, fluids, currentFluid, chunk.oceanFloor, x, z, worldY - 1, hideCaves);
+                boolean above = fullY == 383 ? false : y == 15 ? occludes(all[sy + 1][p - 3840], occluding, fluids, currentFluid, chunk.oceanFloor, x, z, worldY + 1, hideCaves) : occludes(all[sy][p + 256], occluding, fluids, currentFluid, chunk.oceanFloor, x, z, worldY + 1, hideCaves);
+                int mask = (west ? 0 : 1) | (east ? 0 : 2) | (below ? 0 : 4) | (above ? 0 : 8) | (north ? 0 : 16) | (south ? 0 : 32);
+                if (mask != 0) {
+                    positions[count] = p; blocks[count] = block; masks[count] = (byte)mask; count++;
+                    result.faces += Integer.bitCount(mask);
+                    if (fluids[block] != 0) result.shellFluidBlocks++;
                 }
             }
             result.positions[sy] = Arrays.copyOf(positions, count);
             result.blocks[sy] = Arrays.copyOf(blocks, count);
+            result.masks[sy] = Arrays.copyOf(masks, count);
         }
         return result;
     }

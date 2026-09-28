@@ -16,17 +16,17 @@ import java.util.zip.Inflater;
 public final class Reader {
     private final byte[] bytes;
     private final int[] offsets = new int[1024], lengths = new int[1024];
-    public final int kind, regionX, regionZ;
+    public final int version, kind, regionX, regionZ;
     public final List<String> blocks, biomes;
 
     public Reader(Path path) throws IOException {
         bytes = Files.readAllBytes(path);
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes));
         if (in.readByte() != 'B' || in.readByte() != 'R' || in.readByte() != 'S' || in.readByte() != 'K') throw new IOException("Invalid magic");
-        int version = in.readUnsignedByte();
-        if (version != 1) throw new IOException("Unsupported format version " + version);
+        version = in.readUnsignedByte();
+        if (version != 1 && version != 2) throw new IOException("Unsupported format version " + version);
         kind = in.readUnsignedByte();
-        if (kind != 1 && kind != 2) throw new IOException("Invalid kind");
+        if (kind != 1 && kind != 2 || kind == 1 && version != 1) throw new IOException("Invalid kind");
         regionX = in.readInt(); regionZ = in.readInt();
         blocks = table(in);
         biomes = kind == 1 ? table(in) : List.of();
@@ -62,10 +62,16 @@ public final class Reader {
             int count = varint(in);
             if (count < 0 || count > 4096) throw new IOException("Invalid shell count");
             int[] positions = new int[count], blocks = new int[count];
+            byte[] masks = new byte[count];
             int previous = 0;
             for (int i = 0; i < count; i++) { previous += varint(in); if (previous > 4095 || i > 0 && previous <= positions[i - 1]) throw new IOException("Invalid shell position"); positions[i] = previous; }
             for (int i = 0; i < count; i++) blocks[i] = varint(in);
-            result.positions[sy] = positions; result.blocks[sy] = blocks;
+            if (version == 2) for (int i = 0; i < count; i++) {
+                masks[i] = in.readByte();
+                if (masks[i] == 0 || (masks[i] & 0xc0) != 0) throw new IOException("Invalid face mask");
+                result.faces += Integer.bitCount(masks[i] & 63);
+            }
+            result.positions[sy] = positions; result.blocks[sy] = blocks; result.masks[sy] = masks;
         }
         if (in.available() != 0) throw new IOException("Trailing 3d data");
         return result;
