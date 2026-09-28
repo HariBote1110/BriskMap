@@ -27,6 +27,10 @@ public final class Tests {
         run("cave masking uses neighbour floor", Tests::caves);
         run("2d and 3d round trip", Tests::roundTrip);
         run("fixture invariants", Tests::fixtures);
+        run("visible masks match brute force", Tests::visibleMasks);
+        run("water cube surface faces", Tests::waterCube);
+        run("v2 mask round trip", Tests::maskRoundTrip);
+        run("fixture v1 and v2 membership", Tests::fixtureFormats);
         if (failed != 0) System.exit(1);
     }
 
@@ -215,6 +219,8 @@ public final class Tests {
                     Palette blocks = new Palette(), biomes = new Palette();
                     Extracted2d surface = Extractor.extract2d(chunk, blocks, biomes);
                     Extracted3d shell = Extractor.extract3d(chunk, blocks, borders, i, hide);
+                    checkFaceTotals(shell, name + " " + i + " hide=" + hide + " volume");
+                    checkFaceTotals(Extractor.extract3d(chunk, blocks, borders, i, hide, true), name + " " + i + " hide=" + hide + " surface");
                     shellTotal += shell.count(); nonairTotal += shell.nonair;
                     for (int col = 0; col < 256; col++) {
                         int y = surface.y[col], x = col & 15, z = col >>> 4;
@@ -245,15 +251,21 @@ public final class Tests {
     }
 
     private static Extracted3d referenceShell(Chunk[] chunks, int index, Palette palette, boolean hide) {
+        return referenceShell(chunks, index, palette, hide, false);
+    }
+
+    private static Extracted3d referenceShell(Chunk[] chunks, int index, Palette palette, boolean hide, boolean surfaceFluids) {
         int[][][] decoded = new int[1024][][];
         for (int i = 0; i < chunks.length; i++) if (chunks[i] != null) decoded[i] = Extractor.decodeBlocks(chunks[i], palette);
         int[][] all = decoded[index];
         int[][] positions = new int[24][4096], blocks = new int[24][4096];
+        byte[][] masks = new byte[24][4096];
         int[] counts = new int[24];
         int[] dx = {-1, 1, 0, 0, 0, 0}, dy = {0, 0, -1, 1, 0, 0}, dz = {0, 0, 0, 0, -1, 1};
         for (int y = 0; y < 384; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
             int sy = y / 16, p = ((y % 16) * 16 + z) * 16 + x, id = all[sy][p];
             if (Extractor.isAir(palette.get(id))) continue;
+            int mask = 0;
             for (int d = 0; d < 6; d++) {
                 int nx = x + dx[d], ny = y + dy[d], nz = z + dz[d];
                 boolean neighbourOccluding;
@@ -270,25 +282,133 @@ public final class Tests {
                         int localX = nx & 15, localZ = nz & 15;
                         int neighbour = decoded[neighbourIndex][ny / 16][((ny % 16) * 16 + localZ) * 16 + localX];
                         neighbourOccluding = Extractor.isOccluding(palette.get(neighbour));
+                        if (surfaceFluids && fluid(palette.get(id)) != 0 && fluid(palette.get(id)) == fluid(palette.get(neighbour))) neighbourOccluding = true;
                         if (hide && !neighbourOccluding && ny - 64 < 55) {
                             int floor = chunks[neighbourIndex].oceanFloor[localZ * 16 + localX] - 65;
                             if (ny - 64 < floor) neighbourOccluding = true;
                         }
                     }
                 }
-                if (!neighbourOccluding) {
-                    int at = counts[sy]++;
-                    positions[sy][at] = p; blocks[sy][at] = id;
-                    break;
-                }
+                if (!neighbourOccluding) mask |= 1 << d;
             }
+            if (mask != 0) { int at = counts[sy]++; positions[sy][at] = p; blocks[sy][at] = id; masks[sy][at] = (byte)mask; }
         }
         Extracted3d result = new Extracted3d();
         for (int sy = 0; sy < 24; sy++) {
             result.positions[sy] = Arrays.copyOf(positions[sy], counts[sy]);
             result.blocks[sy] = Arrays.copyOf(blocks[sy], counts[sy]);
+            result.masks[sy] = Arrays.copyOf(masks[sy], counts[sy]);
         }
         return result;
+    }
+
+    private static int fluid(String state) {
+        String name = state.split("\\[", 2)[0];
+        return name.equals("minecraft:water") ? 1 : name.equals("minecraft:lava") ? 2 : 0;
+    }
+
+    private static void checkMasks(Extracted3d expected, Extracted3d actual, String label) {
+        long faces = 0;
+        for (int sy = 0; sy < 24; sy++) {
+            check(Arrays.equals(expected.positions[sy], actual.positions[sy]), label + " positions " + sy);
+            check(Arrays.equals(expected.blocks[sy], actual.blocks[sy]), label + " blocks " + sy);
+            check(Arrays.equals(expected.masks[sy], actual.masks[sy]), label + " masks " + sy);
+            for (int i = 0; i < actual.masks[sy].length; i++) {
+                byte mask = actual.masks[sy][i];
+                check(mask != 0, label + " zero mask");
+                faces += Integer.bitCount(mask & 63);
+            }
+        }
+        check(faces == actual.faces, label + " face total");
+    }
+
+    private static void checkFaceTotals(Extracted3d shell, String label) {
+        long faces = 0;
+        for (byte[] section : shell.masks) for (byte mask : section) {
+            check(mask != 0 && (mask & 0xc0) == 0, label + " invalid mask");
+            faces += Integer.bitCount(mask & 63);
+        }
+        check(faces == shell.faces, label + " face total");
+    }
+
+    private static void visibleMasks() throws Exception {
+        for (String name : new String[]{"r.0.0", "r.-1.-1"}) {
+            Region region = new Region(Path.of("feasibility_research/fixtures/" + name + ".mca"));
+            Inflater inflater = new Inflater();
+            for (boolean hide : new boolean[]{false, true}) {
+                BorderCache borders = new BorderCache();
+                Palette palette = new Palette();
+                for (int i = 0; i < 1024; i++) borders.put(i, region.read(i, inflater), palette, hide);
+                for (int index : new int[]{0, 33, 528, 1023}) {
+                    Chunk[] around = new Chunk[1024];
+                    around[index] = region.read(index, inflater);
+                    if ((index & 31) > 0) around[index - 1] = region.read(index - 1, inflater);
+                    if ((index & 31) < 31) around[index + 1] = region.read(index + 1, inflater);
+                    if (index >= 32) around[index - 32] = region.read(index - 32, inflater);
+                    if (index < 992) around[index + 32] = region.read(index + 32, inflater);
+                    for (boolean surface : new boolean[]{false, true}) {
+                        Extracted3d actual = Extractor.extract3d(around[index], palette, borders, index, hide, surface);
+                        Extracted3d expected = referenceShell(around, index, palette, hide, surface);
+                        checkMasks(expected, actual, name + " " + index + " hide=" + hide + " surface=" + surface);
+                        if (!surface) check(actual.same(Extractor.extract3d(around[index], palette, borders, index, hide)), "v1 membership changed");
+                    }
+                }
+            }
+        }
+    }
+
+    private static void waterCube() {
+        Chunk chunk = new Chunk(); chunk.status = "minecraft:full"; chunk.oceanFloor = new int[256];
+        int[] values = new int[4096]; Arrays.fill(values, 1);
+        for (int y = 7; y <= 9; y++) for (int z = 7; z <= 9; z++) for (int x = 7; x <= 9; x++) values[y * 256 + z * 16 + x] = 0;
+        chunk.sections[4] = new Section(0, new String[]{"minecraft:water[level=0]", "minecraft:air"}, pack(values, 4), new String[]{"minecraft:plains"}, null);
+        Chunk[] chunks = new Chunk[1024]; chunks[33] = chunk;
+        Palette palette = new Palette(); BorderCache borders = new BorderCache(); borders.put(33, chunk, palette, false);
+        Extracted3d volume = Extractor.extract3d(chunk, palette, borders, 33, false, false);
+        Extracted3d surface = Extractor.extract3d(chunk, palette, borders, 33, false, true);
+        checkMasks(referenceShell(chunks, 33, palette, false, false), volume, "cube volume");
+        checkMasks(referenceShell(chunks, 33, palette, false, true), surface, "cube surface");
+        int centre = 8 * 256 + 8 * 16 + 8;
+        check(Arrays.binarySearch(volume.positions[4], centre) >= 0, "volume centre absent");
+        check(Arrays.binarySearch(surface.positions[4], centre) < 0, "surface centre present");
+        check(volume.count() == 27 && surface.count() == 26, "cube membership");
+    }
+
+    private static void maskRoundTrip() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("feasibility_research/tools/extractor/build"), "masks-");
+        Palette blocks = new Palette(); blocks.index("minecraft:water");
+        Extracted3d shell = new Extracted3d();
+        shell.positions[0] = new int[]{0, 15, 4095}; shell.blocks[0] = new int[]{0, 0, 0}; shell.masks[0] = new byte[]{1, 42, 63};
+        byte[][] payloads = new byte[1024][]; payloads[33] = Format.encode3d(shell, 2);
+        Path path = dir.resolve("r.0.0.b3d");
+        Format.write(path, 2, 2, 0, 0, blocks, null, payloads, new Deflater(6, true));
+        Reader reader = new Reader(path);
+        check(reader.version == 2, "wrong version");
+        checkMasks(shell, reader.read3d(33), "v2 round trip");
+        Path oldPath = dir.resolve("r.0.1.b3d");
+        payloads[33] = Format.encode3d(shell, 1);
+        Format.write(oldPath, 1, 2, 0, 1, blocks, null, payloads, new Deflater(6, true));
+        Reader old = new Reader(oldPath);
+        check(old.version == 1 && old.read3d(33).same(reader.read3d(33)), "v1 membership differs");
+    }
+
+    private static void fixtureFormats() throws Exception {
+        Region region = new Region(Path.of("feasibility_research/fixtures/r.0.0.mca"));
+        Inflater inflater = new Inflater(); Palette palette = new Palette(); BorderCache borders = new BorderCache();
+        for (int i = 0; i < 1024; i++) borders.put(i, region.read(i, inflater), palette, false);
+        Extracted3d shell = Extractor.extract3d(region.read(33, inflater), palette, borders, 33, false, false);
+        Path dir = Files.createTempDirectory(Path.of("feasibility_research/tools/extractor/build"), "fixture-formats-");
+        byte[][] payloads = new byte[1024][];
+        payloads[33] = Format.encode3d(shell, 1);
+        Path oldPath = dir.resolve("v1.b3d");
+        Format.write(oldPath, 1, 2, 0, 0, palette, null, payloads, new Deflater(6, true));
+        payloads[33] = Format.encode3d(shell, 2);
+        Path newPath = dir.resolve("v2.b3d");
+        Format.write(newPath, 2, 2, 0, 0, palette, null, payloads, new Deflater(6, true));
+        Extracted3d oldShell = new Reader(oldPath).read3d(33);
+        Extracted3d newShell = new Reader(newPath).read3d(33);
+        check(oldShell.same(newShell), "fixture membership changed between formats");
+        checkMasks(shell, newShell, "fixture encoded masks");
     }
 
     private static long[] pack(int[] values, int width) {
