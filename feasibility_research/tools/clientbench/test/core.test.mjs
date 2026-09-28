@@ -22,6 +22,17 @@ test('settle uses latest finished activity and times out', () => {
   assert.deepEqual(detectSettle(events, { now: 5000, start: 0, ready: false, quietMs: 2000, timeoutMs: 5000 }), { settled: false, timedOut: true });
 });
 
+test('a response without a finish expires after five seconds', () => {
+  const events = [
+    { at: 100, kind: 'request', key: 'page:worker', url: 'http://local/worker.mjs' },
+    { at: 200, kind: 'response', key: 'page:worker' },
+  ];
+  assert.deepEqual(detectSettle(events, { now: 5199, start: 0 }), { settled: false, timedOut: false });
+  assert.deepEqual(detectSettle(events, { now: 5200, start: 0 }), {
+    settled: true, timedOut: false, settleMs: 5200, unfinishedCount: 1, unfinishedUrls: ['http://local/worker.mjs'],
+  });
+});
+
 test('orbit percentiles use nearest rank', () => {
   assert.deepEqual(orbitStatistics([0, 10, 30, 70, 130]), {
     frames: 4, fps_mean: 4 * 1000 / (130 - 0), frame_ms_p50: 20, frame_ms_p95: 60,
