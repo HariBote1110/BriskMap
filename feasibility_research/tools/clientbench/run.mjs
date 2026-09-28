@@ -58,7 +58,7 @@ export function detectSettle(events, { now, start, ready = true, quietMs = 2000,
   for (const event of events) {
     if (event.at > now) continue;
     if (event.kind === 'request') {
-      if (event.key) pending.set(event.key, { url: event.url });
+      if (event.key) pending.set(event.key, { at: event.at, url: event.url });
       else inFlight++;
       lastNetwork = Math.max(lastNetwork, event.at);
     }
@@ -75,9 +75,10 @@ export function detectSettle(events, { now, start, ready = true, quietMs = 2000,
     }
     if (event.kind === 'longtask') lastLongTaskEnd = Math.max(lastLongTaskEnd, event.end);
   }
-  const unfinished = [...pending.values()].filter(request => request.responseAt !== undefined && now - request.responseAt >= 5000);
+  const expiryAt = request => Math.min(request.at + 10000, (request.responseAt ?? Infinity) + 5000);
+  const unfinished = [...pending.values()].filter(request => now >= expiryAt(request));
   const unfinishedFields = unfinished.length ? { unfinishedCount: unfinished.length, unfinishedUrls: unfinished.slice(0, 20).map(request => request.url) } : {};
-  for (const request of unfinished) lastFinish = Math.max(lastFinish, request.responseAt + 5000);
+  for (const request of unfinished) lastFinish = Math.max(lastFinish, expiryAt(request));
   const settled = ready && inFlight === 0 && pending.size === unfinished.length && now - lastNetwork >= quietMs && now - lastLongTaskEnd >= quietMs;
   if (settled) return { settled: true, timedOut: false, settleMs: Math.max(lastFinish, lastLongTaskEnd, uploadDoneAt) - start, ...unfinishedFields };
   return { settled: false, timedOut: now - start >= timeoutMs, ...unfinishedFields };
@@ -135,6 +136,7 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
     const { client, child, version } = browser;
     const requests = new Map();
     const active = new Set();
+    const seen = new Set();
     const events = [];
     const counts = {};
     const transfers = {};
@@ -146,7 +148,6 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
     let navigationAt = Date.now();
     let frameNavigatedAt = null;
     const classify = url => classifyUrl(viewer, url);
-    const requestKey = (sessionId, requestId) => `${sessionId ?? 'page'}:${requestId}`;
     client.on('Page.frameNavigated', () => { frameNavigatedAt = Date.now(); });
     client.on('Target.attachedToTarget', event => {
       if (!['worker', 'shared_worker', 'service_worker'].includes(event.targetInfo?.type)) return;
@@ -155,9 +156,11 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
         await client.send('Runtime.runIfWaitingForDebugger', {}, event.sessionId);
       })().catch(cause => { attachmentError ??= String(cause); });
     });
-    client.on('Network.requestWillBeSent', (event, sessionId) => {
+    client.on('Network.requestWillBeSent', event => {
       const at = Date.now();
-      const key = requestKey(sessionId, event.requestId);
+      const key = event.requestId;
+      if (seen.has(key) && !event.redirectResponse) return;
+      seen.add(key);
       if (active.has(key)) {
         const previousClass = requests.get(key) ?? 'other';
         const redirectBytes = event.redirectResponse?.encodedDataLength ?? 0;
@@ -180,13 +183,13 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
       active.add(key);
       events.push({ at, kind: 'request', key, url });
     });
-    client.on('Network.responseReceived', (event, sessionId) => {
-      const key = requestKey(sessionId, event.requestId);
+    client.on('Network.responseReceived', event => {
+      const key = event.requestId;
       if (active.has(key)) events.push({ at: Date.now(), kind: 'response', key });
     });
-    client.on('Network.loadingFinished', (event, sessionId) => {
+    client.on('Network.loadingFinished', event => {
       const at = Date.now();
-      const key = requestKey(sessionId, event.requestId);
+      const key = event.requestId;
       if (!active.has(key)) return;
       const classification = requests.get(key);
       const size = event.encodedDataLength ?? 0;
@@ -195,8 +198,8 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
       active.delete(key);
       events.push({ at, kind: 'finish', key });
     });
-    client.on('Network.loadingFailed', (event, sessionId) => {
-      const key = requestKey(sessionId, event.requestId);
+    client.on('Network.loadingFailed', event => {
+      const key = event.requestId;
       if (!active.delete(key)) return;
       networkErrors++;
       events.push({ at: Date.now(), kind: 'fail', key });
