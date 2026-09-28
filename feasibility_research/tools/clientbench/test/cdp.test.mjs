@@ -142,15 +142,18 @@ test('non-network schemes do not enter request or transfer totals', async () => 
   }
 });
 
-test('worker traffic uses its flattened session without colliding with page request IDs', async () => {
+test('a page request finishes on a worker session and duplicate starts count once', async () => {
   const commands = [];
   const server = fakeCdp((message, send) => {
     commands.push({ method: message.method, sessionId: message.sessionId, params: message.params });
-    if (message.method === 'Page.navigate')
+    if (message.method === 'Page.navigate') {
+      send({ method: 'Network.requestWillBeSent', params: { requestId: '2', request: { url: 'http://local/viewer/worker.mjs' } } });
       send({ method: 'Target.attachedToTarget', params: { sessionId: 'worker-1', targetInfo: { type: 'worker' } } });
+    }
     if (message.method === 'Network.enable' && message.sessionId === 'worker-1') {
-      send({ method: 'Network.requestWillBeSent', sessionId: 'worker-1', params: { requestId: '1', request: { url: 'http://local/viewer/worker.mjs' } } });
-      send({ method: 'Network.loadingFinished', sessionId: 'worker-1', params: { requestId: '1', encodedDataLength: 45 } });
+      send({ method: 'Network.requestWillBeSent', sessionId: 'worker-1', params: { requestId: '2', request: { url: 'http://local/viewer/worker.mjs' } } });
+      send({ method: 'Network.responseReceived', sessionId: 'worker-1', params: { requestId: '2' } });
+      send({ method: 'Network.loadingFinished', sessionId: 'worker-1', params: { requestId: '2', encodedDataLength: 45 } });
     }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -168,6 +171,7 @@ test('worker traffic uses its flattened session without colliding with page requ
     assert.equal(result.requests_total, 2);
     assert.equal(result.transfer_bytes, 168);
     assert.equal(result.requests_unfinished, 0);
+    assert.equal(result.timed_out, false);
     const autoAttach = commands.findIndex(command => command.method === 'Target.setAutoAttach');
     const navigation = commands.findIndex(command => command.method === 'Page.navigate');
     assert.ok(autoAttach >= 0 && autoAttach < navigation);

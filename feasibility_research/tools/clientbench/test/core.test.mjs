@@ -24,12 +24,20 @@ test('settle uses latest finished activity and times out', () => {
 
 test('a response without a finish expires after five seconds', () => {
   const events = [
-    { at: 100, kind: 'request', key: 'page:worker', url: 'http://local/worker.mjs' },
-    { at: 200, kind: 'response', key: 'page:worker' },
+    { at: 100, kind: 'request', key: 'worker', url: 'http://local/worker.mjs' },
+    { at: 200, kind: 'response', key: 'worker' },
   ];
   assert.deepEqual(detectSettle(events, { now: 5199, start: 0 }), { settled: false, timedOut: false });
   assert.deepEqual(detectSettle(events, { now: 5200, start: 0 }), {
     settled: true, timedOut: false, settleMs: 5200, unfinishedCount: 1, unfinishedUrls: ['http://local/worker.mjs'],
+  });
+});
+
+test('a request without a response or finish expires after ten seconds', () => {
+  const events = [{ at: 100, kind: 'request', key: 'worker', url: 'http://local/worker.mjs' }];
+  assert.deepEqual(detectSettle(events, { now: 10099, start: 0 }), { settled: false, timedOut: false });
+  assert.deepEqual(detectSettle(events, { now: 10100, start: 0 }), {
+    settled: true, timedOut: false, settleMs: 10100, unfinishedCount: 1, unfinishedUrls: ['http://local/worker.mjs'],
   });
 });
 
