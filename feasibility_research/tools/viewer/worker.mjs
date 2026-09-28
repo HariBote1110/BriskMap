@@ -3,12 +3,12 @@ import { loadMesher } from '../mesher/src/wasm.mjs';
 
 const palettes=new Map();
 const inflate=async bytes=>new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
-let mesher;
+let mesherPromise;
 self.onmessage=async({data})=>{
   try{
     if(data.type==='palette'){palettes.set(data.region,new Uint32Array(data.colours));return;}
     if(data.type==='mesh'){
-      mesher??=await loadMesher();
+      const mesher=await (mesherPromise??=loadMesher());
       const colours=palettes.get(data.region);
       if(!colours)throw new Error(`Missing palette for ${data.region}`);
       const raw=await inflate(data.compressed);
