@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "A": { "hires": 256, "lowres": 0, "radius": 256 },
+    "B": { "hires": 100, "lowres": 2000 }
+  },
+  "scenarios": {
+    "top": { "distance": 400, "rotation": 0, "angle": 0.1 },
+    "oblique": { "distance": 150, "rotation": 0.6, "angle": 0.9 },
+    "low": { "distance": 40, "rotation": 0.6, "angle": 1.4 }
+  }
+}
