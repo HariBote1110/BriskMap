@@ -2,3 +2,5 @@ external/
 worlds/
 output/
 *.jar
+fixtures/
+tools/extractor/build/
