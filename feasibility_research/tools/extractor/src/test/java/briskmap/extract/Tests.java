@@ -21,7 +21,10 @@ public final class Tests {
         run("height bits 9", () -> bits(9, 256));
         run("NBT selective read", Tests::nbt);
         run("region compression types", Tests::regionCompression);
+        run("occlusion token rules", Tests::occlusionRules);
         run("shell matches brute force", Tests::shell);
+        run("cross-chunk and region edge", Tests::crossChunk);
+        run("cave masking uses neighbour floor", Tests::caves);
         run("2d and 3d round trip", Tests::roundTrip);
         run("fixture invariants", Tests::fixtures);
         if (failed != 0) System.exit(1);
@@ -115,25 +118,61 @@ public final class Tests {
         values[(8 * 16 + 8) * 16 + 8] = 1;
         middle.blockData = pack(values, 4);
         Palette palette = new Palette();
-        Extracted3d actual = Extractor.extract3d(chunk, palette);
-        int[][] all = Extractor.decodeBlocks(chunk, palette);
-        int expected = 0;
-        int stone = palette.index("minecraft:stone");
-        for (int y = 0; y < 384; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
-            int at = (y % 16 * 16 + z) * 16 + x;
-            if (all[y / 16][at] != stone) continue;
-            boolean edge = y == 0 || y == 383 || x == 0 || x == 15 || z == 0 || z == 15;
-            boolean adjacentAir = false;
-            if (y > 0) adjacentAir |= all[(y - 1) / 16][((y - 1) % 16 * 16 + z) * 16 + x] != stone;
-            if (y < 383) adjacentAir |= all[(y + 1) / 16][((y + 1) % 16 * 16 + z) * 16 + x] != stone;
-            if (x > 0) adjacentAir |= all[y / 16][at - 1] != stone;
-            if (x < 15) adjacentAir |= all[y / 16][at + 1] != stone;
-            if (z > 0) adjacentAir |= all[y / 16][at - 16] != stone;
-            if (z < 15) adjacentAir |= all[y / 16][at + 16] != stone;
-            if (edge || adjacentAir) expected++;
-        }
-        check(actual.count() == expected, "shell count " + actual.count() + " != " + expected);
-        check(actual.same(referenceShell(chunk, palette)), "synthetic shell positions differ");
+        Chunk[] chunks = new Chunk[1024]; chunks[33] = chunk;
+        BorderCache borders = new BorderCache(); borders.put(33, chunk, palette, false);
+        Extracted3d actual = Extractor.extract3d(chunk, palette, borders, 33, false);
+        check(actual.same(referenceShell(chunks, 33, palette, false)), "synthetic shell differs");
+    }
+
+    private static void occlusionRules() {
+        String[] names = {"bedrock", "red_bed", "chain", "chain_command_block", "mushroom_stem", "red_mushroom", "red_mushroom_block", "poppy", "short_grass", "grass_block", "snow", "snow_block", "stone_brick_wall", "wall_torch", "flower_pot", "potted_poppy", "oak_fence_gate", "stone", "glass", "white_stained_glass_pane", "tube_coral", "tube_coral_block"};
+        boolean[] occluding = {true, false, false, true, true, false, true, false, false, true, false, true, false, false, false, false, false, true, false, false, false, true};
+        for (int i = 0; i < names.length; i++) check(Extractor.isOccluding("minecraft:" + names[i]) == occluding[i], "occlusion " + names[i]);
+    }
+
+    private static Chunk solidChunk() {
+        Chunk chunk = new Chunk();
+        chunk.status = "minecraft:full";
+        chunk.sections[4] = new Section(0, new String[]{"minecraft:stone"}, null, new String[]{"minecraft:plains"}, null);
+        chunk.oceanFloor = new int[256];
+        return chunk;
+    }
+
+    private static void crossChunk() {
+        Chunk[] chunks = new Chunk[1024];
+        chunks[33] = solidChunk(); chunks[34] = solidChunk();
+        Palette palette = new Palette();
+        BorderCache borders = new BorderCache();
+        borders.put(33, chunks[33], palette, false);
+        borders.put(34, chunks[34], palette, false);
+        Extracted3d shell = Extractor.extract3d(chunks[33], palette, borders, 33, false);
+        int inside = (8 * 16 + 8) * 16 + 15;
+        check(Arrays.binarySearch(shell.positions[4], inside) < 0, "shared face kept");
+        check(shell.same(referenceShell(chunks, 33, palette, false)), "cross-chunk shell differs");
+        chunks[0] = solidChunk(); borders.put(0, chunks[0], palette, false);
+        shell = Extractor.extract3d(chunks[0], palette, borders, 0, false);
+        int seam = (8 * 16 + 8) * 16;
+        check(Arrays.binarySearch(shell.positions[4], seam) < 0, "region seam kept");
+        check(shell.same(referenceShell(chunks, 0, palette, false)), "region edge shell differs");
+    }
+
+    private static void caves() {
+        Chunk[] chunks = new Chunk[1024];
+        chunks[33] = solidChunk(); chunks[34] = solidChunk();
+        int[] values = new int[4096];
+        values[(8 * 16 + 8) * 16] = 1;
+        chunks[34].sections[4] = new Section(0, new String[]{"minecraft:stone", "minecraft:air"}, pack(values, 4), new String[]{"minecraft:plains"}, null);
+        Arrays.fill(chunks[34].oceanFloor, 129);
+        Palette palette = new Palette();
+        int position = (8 * 16 + 8) * 16 + 15;
+        BorderCache keep = new BorderCache(), hide = new BorderCache();
+        for (int index : new int[]{33, 34}) { keep.put(index, chunks[index], palette, false); hide.put(index, chunks[index], palette, true); }
+        Extracted3d visible = Extractor.extract3d(chunks[33], palette, keep, 33, false);
+        Extracted3d hidden = Extractor.extract3d(chunks[33], palette, hide, 33, true);
+        check(Arrays.binarySearch(visible.positions[4], position) >= 0, "cave face missing in keep");
+        check(Arrays.binarySearch(hidden.positions[4], position) < 0, "cave face kept in hide");
+        check(visible.same(referenceShell(chunks, 33, palette, false)), "keep cave reference differs");
+        check(hidden.same(referenceShell(chunks, 33, palette, true)), "hide cave reference differs");
     }
 
     private static void roundTrip() throws Exception {
@@ -160,36 +199,55 @@ public final class Tests {
         for (String name : new String[]{"r.0.0", "r.-1.-1"}) {
             Region region = new Region(Path.of("feasibility_research/fixtures/" + name + ".mca"));
             Inflater inflater = new Inflater();
-            int full = 0, sampled = 0;
-            long shellTotal = 0, nonairTotal = 0;
-            for (int i = 0; i < 1024; i++) {
-                Chunk chunk = region.read(i, inflater);
-                check(chunk != null && "minecraft:full".equals(chunk.status), name + " missing/full " + i);
-                check(region.compressionType(i) == 2, name + " non-zlib chunk " + i);
-                check(chunk.dataVersion == 4671 && chunk.sectionCount == 25 && chunk.sectionMinY == -5 && chunk.sectionMaxY == 19, name + " NBT layout mismatch " + i);
-                full++;
-                Palette blocks = new Palette(), biomes = new Palette();
-                Extracted2d surface = Extractor.extract2d(chunk, blocks, biomes);
-                Extracted3d shell = Extractor.extract3d(chunk, blocks);
-                shellTotal += shell.count(); nonairTotal += shell.nonair;
-                for (int col = 0; col < 256; col++) {
-                    int y = surface.y[col], x = col & 15, z = col >>> 4;
-                    check(y == Extractor.EMPTY_Y || y >= -64 && y <= 319, "surface height");
-                    if (y == Extractor.EMPTY_Y) continue;
-                    check(!Extractor.isAir(blocks.get(surface.block[col])), "air surface");
-                    int sy = (y + 64) / 16, p = (((y + 64) % 16) * 16 + z) * 16 + x;
-                    int at = Arrays.binarySearch(shell.positions[sy], p);
-                    check(at >= 0 && shell.blocks[sy][at] == surface.block[col], "surface absent from shell");
+            long keepTotal = Long.MAX_VALUE;
+            for (boolean hide : new boolean[]{false, true}) {
+                BorderCache borders = new BorderCache();
+                Palette borderPalette = new Palette();
+                for (int i = 0; i < 1024; i++) borders.put(i, region.read(i, inflater), borderPalette, hide);
+                int full = 0, edgeSamples = 0, interiorSamples = 0;
+                long shellTotal = 0, nonairTotal = 0;
+                for (int i = 0; i < 1024; i++) {
+                    Chunk chunk = region.read(i, inflater);
+                    check(chunk != null && "minecraft:full".equals(chunk.status), name + " missing/full " + i);
+                    check(region.compressionType(i) == 2, name + " non-zlib chunk " + i);
+                    check(chunk.dataVersion == 4671 && chunk.sectionCount == 25 && chunk.sectionMinY == -5 && chunk.sectionMaxY == 19, name + " NBT layout mismatch " + i);
+                    full++;
+                    Palette blocks = new Palette(), biomes = new Palette();
+                    Extracted2d surface = Extractor.extract2d(chunk, blocks, biomes);
+                    Extracted3d shell = Extractor.extract3d(chunk, blocks, borders, i, hide);
+                    shellTotal += shell.count(); nonairTotal += shell.nonair;
+                    for (int col = 0; col < 256; col++) {
+                        int y = surface.y[col], x = col & 15, z = col >>> 4;
+                        check(y == Extractor.EMPTY_Y || y >= -64 && y <= 319, "surface height");
+                        if (y == Extractor.EMPTY_Y) continue;
+                        check(!Extractor.isAir(blocks.get(surface.block[col])), "air surface");
+                        int sy = (y + 64) / 16, p = (((y + 64) % 16) * 16 + z) * 16 + x;
+                        int at = Arrays.binarySearch(shell.positions[sy], p);
+                        check(at >= 0 && shell.blocks[sy][at] == surface.block[col], "surface absent from shell " + name + " " + i + " " + col + " hide=" + hide);
+                    }
+                    if (i == 0 || i == 33 || i == 528 || i == 1023) {
+                        Chunk[] around = new Chunk[1024]; around[i] = chunk;
+                        int cx = i & 31, cz = i >>> 5;
+                        if (cx > 0) around[i - 1] = region.read(i - 1, inflater);
+                        if (cx < 31) around[i + 1] = region.read(i + 1, inflater);
+                        if (cz > 0) around[i - 32] = region.read(i - 32, inflater);
+                        if (cz < 31) around[i + 32] = region.read(i + 32, inflater);
+                        check(referenceShell(around, i, blocks, hide).same(shell), "fast shell differs " + name + " " + i + " hide=" + hide);
+                        if (cx == 0 || cx == 31 || cz == 0 || cz == 31) edgeSamples++; else interiorSamples++;
+                    }
                 }
-                if (i % 256 == 0) { sampled++; check(referenceShell(chunk, blocks).same(shell), "fast shell differs"); }
+                check(full == 1024 && edgeSamples >= 1 && interiorSamples >= 1, name + " counts hide=" + hide);
+                check(shellTotal < nonairTotal, name + " shell not smaller hide=" + hide);
+                if (hide) check(shellTotal < keepTotal, name + " cave mask did not reduce shell");
+                else keepTotal = shellTotal;
             }
-            check(full == 1024 && sampled >= 4, name + " counts");
-            check(shellTotal < nonairTotal, name + " shell not smaller");
         }
     }
 
-    private static Extracted3d referenceShell(Chunk chunk, Palette palette) {
-        int[][] all = Extractor.decodeBlocks(chunk, palette);
+    private static Extracted3d referenceShell(Chunk[] chunks, int index, Palette palette, boolean hide) {
+        int[][][] decoded = new int[1024][][];
+        for (int i = 0; i < chunks.length; i++) if (chunks[i] != null) decoded[i] = Extractor.decodeBlocks(chunks[i], palette);
+        int[][] all = decoded[index];
         int[][] positions = new int[24][4096], blocks = new int[24][4096];
         int[] counts = new int[24];
         int[] dx = {-1, 1, 0, 0, 0, 0}, dy = {0, 0, -1, 1, 0, 0}, dz = {0, 0, 0, 0, -1, 1};
@@ -198,8 +256,27 @@ public final class Tests {
             if (Extractor.isAir(palette.get(id))) continue;
             for (int d = 0; d < 6; d++) {
                 int nx = x + dx[d], ny = y + dy[d], nz = z + dz[d];
-                if (nx < 0 || nx > 15 || ny < 0 || ny > 383 || nz < 0 || nz > 15 ||
-                    !Extractor.isOccluding(palette.get(all[ny / 16][((ny % 16) * 16 + nz) * 16 + nx]))) {
+                boolean neighbourOccluding;
+                if (ny < 0 || ny > 383) neighbourOccluding = false;
+                else {
+                    int neighbourIndex = index;
+                    if (nx < 0) neighbourIndex = (index & 31) == 0 ? -1 : index - 1;
+                    else if (nx > 15) neighbourIndex = (index & 31) == 31 ? -1 : index + 1;
+                    else if (nz < 0) neighbourIndex = index < 32 ? -1 : index - 32;
+                    else if (nz > 15) neighbourIndex = index >= 992 ? -1 : index + 32;
+                    if (neighbourIndex < 0) neighbourOccluding = true;
+                    else if (chunks[neighbourIndex] == null) neighbourOccluding = false;
+                    else {
+                        int localX = nx & 15, localZ = nz & 15;
+                        int neighbour = decoded[neighbourIndex][ny / 16][((ny % 16) * 16 + localZ) * 16 + localX];
+                        neighbourOccluding = Extractor.isOccluding(palette.get(neighbour));
+                        if (hide && !neighbourOccluding && ny - 64 < 55) {
+                            int floor = chunks[neighbourIndex].oceanFloor[localZ * 16 + localX] - 65;
+                            if (ny - 64 < floor) neighbourOccluding = true;
+                        }
+                    }
+                }
+                if (!neighbourOccluding) {
                     int at = counts[sy]++;
                     positions[sy][at] = p; blocks[sy][at] = id;
                     break;
