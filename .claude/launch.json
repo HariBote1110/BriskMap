@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mesher-bench",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["feasibility_research/tools/mesher/bench/serve.mjs", "--data", "feasibility_research/output/real/hide-surface", "--port", "8787"],
+      "port": 8787
+    }
+  ]
+}
