@@ -4,3 +4,5 @@ output/
 *.jar
 fixtures/
 tools/extractor/build/
+tools/mesher/dist/
+tools/mesher/rust/target/
