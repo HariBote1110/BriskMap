@@ -51,22 +51,36 @@ export function subtractCpu(after, before) {
 
 export function detectSettle(events, { now, start, ready = true, quietMs = 2000, timeoutMs = 180000, uploadDoneAt = start }) {
   let inFlight = 0;
+  const pending = new Map();
   let lastNetwork = start;
   let lastFinish = start;
   let lastLongTaskEnd = start;
   for (const event of events) {
     if (event.at > now) continue;
-    if (event.kind === 'request') { inFlight++; lastNetwork = Math.max(lastNetwork, event.at); }
+    if (event.kind === 'request') {
+      if (event.key) pending.set(event.key, { url: event.url });
+      else inFlight++;
+      lastNetwork = Math.max(lastNetwork, event.at);
+    }
+    if (event.kind === 'response') {
+      const request = pending.get(event.key);
+      if (request) request.responseAt = event.at;
+      lastNetwork = Math.max(lastNetwork, event.at);
+    }
     if (event.kind === 'finish' || event.kind === 'fail') {
-      inFlight = Math.max(0, inFlight - 1);
+      if (event.key) pending.delete(event.key);
+      else inFlight = Math.max(0, inFlight - 1);
       lastNetwork = Math.max(lastNetwork, event.at);
       if (event.kind === 'finish') lastFinish = Math.max(lastFinish, event.at);
     }
     if (event.kind === 'longtask') lastLongTaskEnd = Math.max(lastLongTaskEnd, event.end);
   }
-  const settled = ready && inFlight === 0 && now - lastNetwork >= quietMs && now - lastLongTaskEnd >= quietMs;
-  if (settled) return { settled: true, timedOut: false, settleMs: Math.max(lastFinish, lastLongTaskEnd, uploadDoneAt) - start };
-  return { settled: false, timedOut: now - start >= timeoutMs };
+  const unfinished = [...pending.values()].filter(request => request.responseAt !== undefined && now - request.responseAt >= 5000);
+  const unfinishedFields = unfinished.length ? { unfinishedCount: unfinished.length, unfinishedUrls: unfinished.slice(0, 20).map(request => request.url) } : {};
+  for (const request of unfinished) lastFinish = Math.max(lastFinish, request.responseAt + 5000);
+  const settled = ready && inFlight === 0 && pending.size === unfinished.length && now - lastNetwork >= quietMs && now - lastLongTaskEnd >= quietMs;
+  if (settled) return { settled: true, timedOut: false, settleMs: Math.max(lastFinish, lastLongTaskEnd, uploadDoneAt) - start, ...unfinishedFields };
+  return { settled: false, timedOut: now - start >= timeoutMs, ...unfinishedFields };
 }
 
 // Nearest-rank percentile: sorted value at ceil(p * sample count), with a minimum rank of one.
@@ -124,39 +138,68 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
     const events = [];
     const counts = {};
     const transfers = {};
+    const nonNetworkByScheme = {};
+    let nonNetworkRequests = 0;
     let transferBytes = 0;
     let networkErrors = 0;
+    let attachmentError;
     let navigationAt = Date.now();
     let frameNavigatedAt = null;
     const classify = url => classifyUrl(viewer, url);
+    const requestKey = (sessionId, requestId) => `${sessionId ?? 'page'}:${requestId}`;
     client.on('Page.frameNavigated', () => { frameNavigatedAt = Date.now(); });
-    client.on('Network.requestWillBeSent', event => {
+    client.on('Target.attachedToTarget', event => {
+      if (!['worker', 'shared_worker', 'service_worker'].includes(event.targetInfo?.type)) return;
+      void (async () => {
+        await client.send('Network.enable', {}, event.sessionId);
+        await client.send('Runtime.runIfWaitingForDebugger', {}, event.sessionId);
+      })().catch(cause => { attachmentError ??= String(cause); });
+    });
+    client.on('Network.requestWillBeSent', (event, sessionId) => {
       const at = Date.now();
-      if (active.has(event.requestId)) {
-        const previousClass = requests.get(event.requestId) ?? 'other';
+      const key = requestKey(sessionId, event.requestId);
+      if (active.has(key)) {
+        const previousClass = requests.get(key) ?? 'other';
         const redirectBytes = event.redirectResponse?.encodedDataLength ?? 0;
         transferBytes += redirectBytes;
         transfers[previousClass] = (transfers[previousClass] ?? 0) + redirectBytes;
-        active.delete(event.requestId);
-        events.push({ at, kind: 'finish' });
+        active.delete(key);
+        events.push({ at, kind: 'finish', key });
       }
-      const classification = classify(event.request.url);
+      const url = event.request.url;
+      const scheme = new URL(url).protocol.slice(0, -1).toLowerCase();
+      if (!['http', 'https', 'ws', 'wss'].includes(scheme)) {
+        nonNetworkRequests++;
+        nonNetworkByScheme[scheme] = (nonNetworkByScheme[scheme] ?? 0) + 1;
+        requests.delete(key);
+        return;
+      }
+      const classification = classify(url);
       counts[classification] = (counts[classification] ?? 0) + 1;
-      requests.set(event.requestId, classification);
-      active.add(event.requestId);
-      events.push({ at, kind: 'request' });
+      requests.set(key, classification);
+      active.add(key);
+      events.push({ at, kind: 'request', key, url });
     });
-    client.on('Network.loadingFinished', event => {
+    client.on('Network.responseReceived', (event, sessionId) => {
+      const key = requestKey(sessionId, event.requestId);
+      if (active.has(key)) events.push({ at: Date.now(), kind: 'response', key });
+    });
+    client.on('Network.loadingFinished', (event, sessionId) => {
       const at = Date.now();
-      const classification = requests.get(event.requestId) ?? 'other';
+      const key = requestKey(sessionId, event.requestId);
+      if (!active.has(key)) return;
+      const classification = requests.get(key);
       const size = event.encodedDataLength ?? 0;
       transferBytes += size;
       transfers[classification] = (transfers[classification] ?? 0) + size;
-      if (active.delete(event.requestId)) events.push({ at, kind: 'finish' });
+      active.delete(key);
+      events.push({ at, kind: 'finish', key });
     });
-    client.on('Network.loadingFailed', event => {
+    client.on('Network.loadingFailed', (event, sessionId) => {
+      const key = requestKey(sessionId, event.requestId);
+      if (!active.delete(key)) return;
       networkErrors++;
-      if (active.delete(event.requestId)) events.push({ at: Date.now(), kind: 'fail' });
+      events.push({ at: Date.now(), kind: 'fail', key });
     });
     await client.send('Network.enable');
     await client.send('Network.setCacheDisabled', { cacheDisabled: true });
@@ -166,6 +209,7 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
     let source = readFileSync(join(base, 'instrument.js'), 'utf8');
     if (viewer === 'bluemap') source = `localStorage.setItem('bluemap-hiresViewDistance', ${JSON.stringify(String(setting.hires))}); localStorage.setItem('bluemap-lowresViewDistance', ${JSON.stringify(String(setting.lowres))});\n` + source;
     await client.send('Page.addScriptToEvaluateOnNewDocument', { source });
+    await client.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     const cpuStart = sampleCpu(child.pid);
     navigationAt = Date.now();
     await client.send('Page.navigate', { url: url ?? pageUrl(viewer, scenario, setting, targetY) });
@@ -179,11 +223,12 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
       const longTaskEvents = (page.longTasks ?? []).map(task => ({ kind: 'longtask', at: navigationAt + task.start, end: navigationAt + task.start + task.duration }));
       const upload = page.stats?.t_upload_done_ms;
       settled = detectSettle([...events, ...longTaskEvents], { now: Date.now(), start: navigationAt, ready: viewer === 'bluemap' || page.ready, uploadDoneAt: Number.isFinite(upload) ? navigationAt + upload : navigationAt });
-      if (settled.settled || settled.timedOut || page.error) break;
+      if (settled.settled || settled.timedOut || page.error || attachmentError) break;
       await sleep(100);
     }
     const cpuSettle = sampleCpu(child.pid);
     const loadCpu = subtractCpu(cpuSettle, cpuStart);
+    error ??= attachmentError;
     let heapMb = null, gl = { buffer_bytes: 0, texture_bytes: 0 }, y = targetY, distances;
     try {
       const metrics = await client.send('Performance.getMetrics');
@@ -229,6 +274,8 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
       target: { x: 0, y, z: 0 }, distance: scenario.distance, rotation: scenario.rotation, angle: scenario.angle,
       settle_ms: settled.settleMs ?? null, timed_out: settled.timedOut,
       requests_total: Object.values(counts).reduce((sum, value) => sum + value, 0), requests_by_class: counts,
+      requests_unfinished: settled.unfinishedCount ?? 0, requests_unfinished_urls: settled.unfinishedUrls ?? [],
+      non_network_requests: nonNetworkRequests, non_network_by_scheme: nonNetworkByScheme,
       transfer_bytes: transferBytes, transfer_by_class: transfers,
       cpu_ms_load_total: loadCpu.total, cpu_ms_load_by_type: loadCpu.byType,
       gl_buffer_bytes: gl.buffer_bytes, gl_texture_bytes: gl.texture_bytes,

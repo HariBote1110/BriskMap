@@ -19,7 +19,7 @@ export class CdpClient {
         this.pending.delete(message.id);
         if (message.error) pending?.reject(new Error(message.error.message));
         else pending?.resolve(message.result ?? {});
-      } else for (const listener of this.listeners.get(message.method) ?? []) listener(message.params ?? {});
+      } else for (const listener of this.listeners.get(message.method) ?? []) listener(message.params ?? {}, message.sessionId);
     });
     socket.addEventListener('close', () => {
       for (const pending of this.pending.values()) pending.reject(new Error('CDP socket closed'));
@@ -31,7 +31,7 @@ export class CdpClient {
     listeners.push(listener);
     this.listeners.set(method, listeners);
   }
-  send(method, params = {}) {
+  send(method, params = {}, sessionId) {
     return new Promise((resolve, reject) => {
       const id = ++this.nextId;
       const timer = setTimeout(() => {
@@ -42,7 +42,7 @@ export class CdpClient {
         resolve: value => { clearTimeout(timer); resolve(value); },
         reject: error => { clearTimeout(timer); reject(error); },
       });
-      this.socket.send(JSON.stringify({ id, method, params }));
+      this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
   }
   async evaluate(expression) {
