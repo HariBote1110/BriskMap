@@ -82,14 +82,14 @@ function dimensionKind(dimension) {
 export async function createViewer(canvas, options) {
   if (MOCK.error === 'webgl2') {
     await sleep(100);
-    throw codedError('WebGL2 is not available', { code: 'webgl2' });
+    throw codedError('WebGL2 is not available', { code: 'webgl2', fatal: true });
   }
   const { index } = options;
   const ctx = canvas.getContext('2d');
   if (!canvas.hasAttribute('tabindex')) canvas.setAttribute('tabindex', '0');
 
   let map = index.maps.find((m) => m.id === options.mapId);
-  if (!map) throw new Error(`Unknown map ${options.mapId}`);
+  if (!map) throw codedError(`Unknown map ${options.mapId}`, { code: 'unknown-map', fatal: true });
   let view = defaults(map, options.mode ?? '3d');
   Object.assign(view, sanitise(options.view ?? {}));
 
@@ -105,7 +105,7 @@ export async function createViewer(canvas, options) {
   let disposed = false;
 
   function defaults(m, mode) {
-    return { mode, mapId: m.id, x: m.spawn[0], z: m.spawn[2], y: m.spawn[1], yaw: 0, pitch: 45, distance: 128, zoom: 1 };
+    return { mode, mapId: m.id, x: m.spawn[0], z: m.spawn[2], y: m.spawn[1], yaw: 0, pitch: 45, distance: 120, zoom: 1 };
   }
 
   function sanitise(partial) {
@@ -326,14 +326,14 @@ export async function createViewer(canvas, options) {
     setTimeout(() => {
       clearInterval(progressTimer);
       Object.assign(status, { phase: 'error', message: 'WebGL context lost (mock).' });
-      options.onError?.(codedError('WebGL context lost (mock).', { code: 'context-lost', fatal: true }));
+      options.onError?.(codedError('WebGL context lost (mock).', { code: 'render', fatal: true }));
       emitStatus();
     }, 1500);
   }
   if (MOCK.error === 'nonfatal') {
     let n = 0;
     const timer = setInterval(() => {
-      options.onError?.(codedError(`r.${n}.0.b3d: HTTP 404`, { code: 'http', status: 404 }));
+      options.onError?.(codedError(`r.${n}.0.b3d: HTTP 404`, { code: 'region', fatal: false }));
       if (++n >= 8) clearInterval(timer);
     }, 700);
   }
@@ -356,8 +356,7 @@ export async function createViewer(canvas, options) {
     },
     async setMap(mapId) {
       const next = index.maps.find((m) => m.id === mapId);
-      if (!next) throw new Error(`Unknown map ${mapId}`);
-      if (next === map) return;
+      if (!next) throw codedError(`Unknown map ${mapId}`, { code: 'unknown-map', fatal: false });
       await sleep(30);
       map = next;
       view = { ...defaults(map, view.mode) };

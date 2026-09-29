@@ -185,12 +185,25 @@ function onHashChange() {
   enqueueSwitch(async (current) => {
     const plan = planHashChange(current, parsed, index.maps);
     if (plan.unknownMap) showUnknownMapNotice(parsed.mapId, findMap(current.mapId));
-    if (plan.mapId) await viewer.setMap(plan.mapId);
+    const switched = plan.mapId ? await trySetMap(plan.mapId) : false;
     if (plan.mode) await viewer.setMode(plan.mode);
-    // After a map switch the engine starts from that map's defaults, so apply every field.
-    const view = plan.mapId ? parsed.view : plan.view;
+    // setMap resets the view to the new map's spawn, so the URL's fields are all applied afterwards.
+    const view = switched ? parsed.view : plan.view;
     if (view && Object.keys(view).length) viewer.setView(view);
   });
+}
+
+// setMap keeps the mode and moves to the new map's spawn. It rejects with code 'unknown-map'
+// (leaving the current map as it is) when the engine's index no longer has the id.
+async function trySetMap(id) {
+  try {
+    await viewer.setMap(id);
+    return true;
+  } catch (error) {
+    if (error?.code !== 'unknown-map') throw error;
+    showUnknownMapNotice(id, findMap(viewer.getView().mapId));
+    return false;
+  }
 }
 
 function showUnknownMapNotice(id, fallback) {
@@ -212,7 +225,7 @@ function switchMode(mode) {
 
 function switchMap(id) {
   enqueueSwitch(async (current) => {
-    if (current.mapId !== id) await viewer.setMap(id);
+    if (current.mapId !== id) await trySetMap(id);
   }, { focus: true });
 }
 
@@ -301,13 +314,16 @@ function onStatus(status) {
   if (status.phase === 'error' && !fatal) showFatal(status.message);
 }
 
+// The engine marks every error with `fatal`: true means status.phase has become 'error' and the
+// map has stopped; false means the view keeps working (a region, texture or index poll failed).
 function onError(error) {
   console.warn('[BriskMap]', error);
-  // Fatal errors also set status.phase = 'error'; let that status arrive before deciding.
-  setTimeout(() => {
-    if (fatal || lastPhase === 'error') return;
-    if (allowToast()) notes.toast(t('toast.error', { message: error?.message ?? String(error) }));
-  }, 0);
+  if (error?.fatal) {
+    if (!fatal) showFatal(error.message);
+    return;
+  }
+  if (fatal) return;
+  if (allowToast()) notes.toast(t('toast.error', { message: error?.message ?? String(error) }));
 }
 
 function showTexturesHint() {
