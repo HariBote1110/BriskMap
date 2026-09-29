@@ -5,8 +5,21 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CdpClient, chromeArguments } from '../cdp.mjs';
+import { CdpClient, chromeArguments, launchChrome } from '../cdp.mjs';
 import { runOne } from '../run.mjs';
+
+const missingWebSocket = 'Node 22+ or --experimental-websocket is required (global WebSocket missing)';
+const webSocketTest = (name, body) => test(name, { skip: globalThis.WebSocket ? false : missingWebSocket }, body);
+
+test('Chrome launch rejects a missing global WebSocket before starting', async () => {
+  const original = globalThis.WebSocket;
+  try {
+    globalThis.WebSocket = undefined;
+    await assert.rejects(launchChrome('/nonexistent/chrome'), { message: missingWebSocket });
+  } finally {
+    globalThis.WebSocket = original;
+  }
+});
 
 test('Chrome arguments use mobile window, new headless mode and append supplied flags', () => {
   const flags = chromeArguments(9222, '/tmp/profile', { mobile: true, headless: true, chromeFlags: ['--use-gl=angle', '--use-angle=swiftshader'] });
@@ -68,7 +81,7 @@ function fakeCdp(onMessage = () => {}) {
   return server;
 }
 
-test('fake CDP socket produces a complete JSON line', async () => {
+webSocketTest('fake CDP socket produces a complete JSON line', async () => {
   const server = fakeCdp();
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const directory = mkdtempSync(join(tmpdir(), 'clientbench-test-'));
@@ -103,7 +116,7 @@ test('fake CDP socket produces a complete JSON line', async () => {
   }
 });
 
-test('mobile emulation commands precede navigation and renderer is evaluated', async () => {
+webSocketTest('mobile emulation commands precede navigation and renderer is evaluated', async () => {
   const commands = [];
   const server = fakeCdp(message => commands.push(message));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -141,7 +154,7 @@ test('mobile emulation commands precede navigation and renderer is evaluated', a
   }
 });
 
-test('CDP sends to flattened sessions and passes event session IDs to listeners', async () => {
+webSocketTest('CDP sends to flattened sessions and passes event session IDs to listeners', async () => {
   const received = [];
   const server = fakeCdp((message, send) => {
     if (message.method === 'Network.enable' && message.sessionId === 'worker-1')
@@ -162,7 +175,7 @@ test('CDP sends to flattened sessions and passes event session IDs to listeners'
   }
 });
 
-test('non-network schemes do not enter request or transfer totals', async () => {
+webSocketTest('non-network schemes do not enter request or transfer totals', async () => {
   const server = fakeCdp((message, send) => {
     if (message.method !== 'Page.navigate') return;
     for (const [requestId, url] of [['2', 'data:image/png;base64,AA=='], ['3', 'blob:http://local/image'], ['4', 'about:blank'], ['5', 'chrome-extension://abc/script.js']]) {
@@ -194,7 +207,7 @@ test('non-network schemes do not enter request or transfer totals', async () => 
   }
 });
 
-test('a page request finishes on a worker session and duplicate starts count once', async () => {
+webSocketTest('a page request finishes on a worker session and duplicate starts count once', async () => {
   const commands = [];
   const server = fakeCdp((message, send) => {
     commands.push({ method: message.method, sessionId: message.sessionId, params: message.params });

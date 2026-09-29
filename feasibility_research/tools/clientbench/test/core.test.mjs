@@ -2,7 +2,32 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import { parsePsTime, collectProcessCpu, detectSettle, orbitStatistics, classifyUrl, argumentsFrom, invalidReasons } from '../run.mjs';
+import { parsePsTime, collectProcessCpu, parseProcStat, collectProcCpu, detectSettle, orbitStatistics, classifyUrl, argumentsFrom, invalidReasons } from '../run.mjs';
+
+const procStat = (pid, name, ppid, utime, stime) => {
+  const fields = Array(19).fill('0');
+  fields[0] = String(ppid);
+  fields[10] = String(utime);
+  fields[11] = String(stime);
+  return `${pid} (${name}) S ${fields.join(' ')}`;
+};
+
+test('Linux stat parsing handles process names with spaces and parentheses', () => {
+  assert.deepEqual(parseProcStat(procStat(101, 'Chrome_ChildIOT hread (worker)', 100, 13, 7)),
+    { pid: 101, ppid: 100, ticks: 20 });
+});
+
+test('Linux CPU collection follows descendants and converts ticks to milliseconds', () => {
+  const entries = [
+    { stat: procStat(100, 'chrome', 1, 10, 15), cmdline: 'chrome\0--headless\0' },
+    { stat: procStat(101, 'Chrome_ChildIOT hread', 100, 3, 4), cmdline: 'chrome\0--type=renderer\0' },
+    { stat: procStat(102, 'gpu)', 101, 5, 0), cmdline: 'chrome\0--type=gpu-process\0' },
+    { stat: procStat(103, 'unrelated', 1, 100, 0), cmdline: 'chrome\0--type=renderer\0' },
+  ];
+  assert.deepEqual(collectProcCpu(entries, 100, 250), {
+    total: 148, byType: { browser: 100, renderer: 28, 'gpu-process': 20 },
+  });
+});
 
 test('phone options parse with defaults and reject invalid durations', () => {
   const defaults = argumentsFrom(['--chrome', 'chromium']);
