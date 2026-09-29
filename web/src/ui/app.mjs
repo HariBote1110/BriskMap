@@ -166,26 +166,30 @@ function writeHash(view) {
 }
 const writeHashThrottled = createThrottle(writeHash, HASH_INTERVAL_MS);
 
-function onHashChange() {
+// Runs engine calls one after another, then brings the chrome and the URL up to date.
+function enqueueSwitch(work, { focus = false } = {}) {
   if (!viewer) return;
-  const parsed = parseHash(location.hash);
   switching = switching.then(async () => {
-    const plan = planHashChange(viewer.getView(), parsed, index.maps);
-    if (plan.unknownMap) showUnknownMapNotice(parsed.mapId, findMap(viewer.getView().mapId));
-    try {
-      if (plan.mapId) await viewer.setMap(plan.mapId);
-      if (plan.mode) await viewer.setMode(plan.mode);
-      // After a map switch the engine starts from that map's defaults, so apply every field.
-      const view = plan.mapId ? parsed.view : plan.view;
-      if (view && Object.keys(view).length) viewer.setView(view);
-    } catch (error) {
-      reportError(error);
-    }
-    const now = viewer.getView();
-    renderMapAndMode(now);
-    renderCoords(now);
+    try { await work(viewer.getView()); } catch (error) { onError(error); }
+    const view = viewer.getView();
+    renderMapAndMode(view);
+    renderCoords(view);
     writeHashThrottled.cancel();
-    writeHash(now);
+    writeHash(view);
+    if (focus) focusCanvas();
+  });
+}
+
+function onHashChange() {
+  const parsed = parseHash(location.hash);
+  enqueueSwitch(async (current) => {
+    const plan = planHashChange(current, parsed, index.maps);
+    if (plan.unknownMap) showUnknownMapNotice(parsed.mapId, findMap(current.mapId));
+    if (plan.mapId) await viewer.setMap(plan.mapId);
+    if (plan.mode) await viewer.setMode(plan.mode);
+    // After a map switch the engine starts from that map's defaults, so apply every field.
+    const view = plan.mapId ? parsed.view : plan.view;
+    if (view && Object.keys(view).length) viewer.setView(view);
   });
 }
 
@@ -201,33 +205,15 @@ function showUnknownMapNotice(id, fallback) {
 // ---- actions ---------------------------------------------------------------------
 
 function switchMode(mode) {
-  if (!viewer) return;
-  switching = switching.then(async () => {
-    if (viewer.getView().mode !== mode) {
-      try { await viewer.setMode(mode); } catch (error) { reportError(error); }
-    }
-    const view = viewer.getView();
-    renderMapAndMode(view);
-    renderCoords(view);
-    writeHashThrottled.cancel();
-    writeHash(view);
-    focusCanvas();
-  });
+  enqueueSwitch(async (current) => {
+    if (current.mode !== mode) await viewer.setMode(mode);
+  }, { focus: true });
 }
 
 function switchMap(id) {
-  if (!viewer) return;
-  switching = switching.then(async () => {
-    if (viewer.getView().mapId !== id) {
-      try { await viewer.setMap(id); } catch (error) { reportError(error); }
-    }
-    const view = viewer.getView();
-    renderMapAndMode(view);
-    renderCoords(view);
-    writeHashThrottled.cancel();
-    writeHash(view);
-    focusCanvas();
-  });
+  enqueueSwitch(async (current) => {
+    if (current.mapId !== id) await viewer.setMap(id);
+  }, { focus: true });
 }
 
 let bubbleTimer = null;
@@ -322,10 +308,6 @@ function onError(error) {
     if (fatal || lastPhase === 'error') return;
     if (allowToast()) notes.toast(t('toast.error', { message: error?.message ?? String(error) }));
   }, 0);
-}
-
-function reportError(error) {
-  onError(error);
 }
 
 function showTexturesHint() {
