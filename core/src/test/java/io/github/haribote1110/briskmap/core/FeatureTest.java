@@ -78,7 +78,8 @@ class FeatureTest {
                         Arrays.copyOfRange(current, newTable + 8192, current.length - 4100));
                 Reader reader = new Reader(out.resolve(base + "." + extension));
                 Region source = new Region(in.resolve(base + ".mca"));
-                for (int i = 0; i < 1024; i++) assertEquals(source.timestamp(i), reader.timestamps[i]);
+                for (int i = 0; i < 1024; i++)
+                    assertEquals(source.present(i) ? source.timestamp(i) : 0, reader.timestamps[i]);
             }
         }
     }

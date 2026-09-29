@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import io.github.haribote1110.briskmap.core.extract.Extracted2d;
 import io.github.haribote1110.briskmap.core.extract.Extracted3d;
+import io.github.haribote1110.briskmap.core.extract.Palette;
+import io.github.haribote1110.briskmap.core.format.Format;
 import io.github.haribote1110.briskmap.core.format.Reader;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -12,6 +14,7 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -21,6 +24,79 @@ import org.junit.jupiter.api.Assumptions;
 
 class IncrementalTest {
     private static final ExtractOptions OPTIONS = new ExtractOptions(false, true, 6, true, true);
+
+    @Test void nonFullAndUnsupportedChunksDoNotRewriteUnchangedRegion() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "unchanged-edge-");
+        Path input = dir.resolve("r.0.0.mca"), out = dir.resolve("out");
+        byte[][] chunks = new byte[1024][];
+        int[] stamps = new int[1024];
+        chunks[1] = chunk("minecraft:full", "minecraft:stone", false); stamps[1] = 11;
+        chunks[32] = chunk("minecraft:full", "minecraft:stone", false); stamps[32] = 12;
+        chunks[33] = chunk("minecraft:carved", "minecraft:stone", false); stamps[33] = 13;
+        chunks[34] = chunk("minecraft:full", "minecraft:stone", false); stamps[34] = 14;
+        chunks[65] = chunk("minecraft:full", "minecraft:stone", false); stamps[65] = 15;
+        chunks[70] = chunk("minecraft:full", "minecraft:stone", false); stamps[70] = 16;
+        chunks[100] = chunk("minecraft:full", "minecraft:stone", false); stamps[100] = 17;
+        writeRegion(input, chunks, stamps, 70);
+        RegionExtractor.extract(input, out, OPTIONS);
+        Path twoPath = out.resolve("r.0.0.b2d"), threePath = out.resolve("r.0.0.b3d");
+        byte[] firstTwo = Files.readAllBytes(twoPath), firstThree = Files.readAllBytes(threePath);
+        for (Path path : List.of(twoPath, threePath)) {
+            Reader reader = new Reader(path);
+            assertEquals(13, reader.timestamps[33]);
+            assertEquals(16, reader.timestamps[70]);
+            assertEquals(0, reader.timestamps[71]);
+        }
+        FileTime fixedTime = FileTime.fromMillis(1_700_000_000_000L);
+        Files.setLastModifiedTime(twoPath, fixedTime);
+        Files.setLastModifiedTime(threePath, fixedTime);
+
+        RegionResult unchanged = RegionExtractor.update(input, out, OPTIONS);
+        assertFalse(unchanged.written());
+        assertEquals(0, unchanged.outputFiles());
+        assertEquals(0, unchanged.chunksExtracted());
+        assertArrayEquals(firstTwo, Files.readAllBytes(twoPath));
+        assertArrayEquals(firstThree, Files.readAllBytes(threePath));
+        assertEquals(fixedTime, Files.getLastModifiedTime(twoPath));
+        assertEquals(fixedTime, Files.getLastModifiedTime(threePath));
+
+        chunks[33] = chunk("minecraft:full", "minecraft:diamond_block", false); stamps[33] = 18;
+        writeRegion(input, chunks, stamps, 70);
+        RegionResult changed = RegionExtractor.update(input, out, OPTIONS);
+        assertTrue(changed.written());
+        assertEquals(5, changed.chunksExtracted());
+        Path fresh = dir.resolve("fresh");
+        RegionExtractor.extract(input, fresh, OPTIONS);
+        Reader actualTwo = new Reader(twoPath), actualThree = new Reader(threePath);
+        Reader freshTwo = new Reader(fresh.resolve("r.0.0.b2d"));
+        Reader freshThree = new Reader(fresh.resolve("r.0.0.b3d"));
+        for (int i = 0; i < 1024; i++) {
+            compare2d(actualTwo, freshTwo, i);
+            compare3d(actualThree, freshThree, i);
+            assertEquals(stamps[i], actualTwo.timestamps[i]);
+            assertEquals(stamps[i], actualThree.timestamps[i]);
+        }
+    }
+
+    @Test void identicalOutputBytesDoNotReplaceExistingFile() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "identical-");
+        Path file = dir.resolve("r.0.0.b3d");
+        byte[][] payloads = new byte[1024][];
+        long[] timestamps = new long[1024];
+        payloads[0] = new byte[]{1, 2, 3};
+        timestamps[0] = 7;
+        Palette blocks = new Palette();
+        blocks.index("minecraft:stone");
+        assertTrue(Format.writeV3IfChanged(file, 2, 0, 0, 0, blocks, null, payloads, timestamps).written());
+        byte[] before = Files.readAllBytes(file);
+        FileTime fixedTime = FileTime.fromMillis(1_700_000_000_000L);
+        Files.setLastModifiedTime(file, fixedTime);
+        Format.WriteResult unchanged = Format.writeV3IfChanged(file, 2, 0, 0, 0, blocks, null, payloads, timestamps);
+        assertFalse(unchanged.written());
+        assertEquals(before.length, unchanged.bytes());
+        assertArrayEquals(before, Files.readAllBytes(file));
+        assertEquals(fixedTime, Files.getLastModifiedTime(file));
+    }
 
     @Test void changedEdgesAndChunkMembershipMatchFreshExtraction() throws Exception {
         Path dir = Files.createTempDirectory(Path.of("core/build"), "changes-");
@@ -140,6 +216,10 @@ class IncrementalTest {
     }
 
     private static void writeRegion(Path path, byte[][] chunks, int[] stamps) throws IOException {
+        writeRegion(path, chunks, stamps, -1);
+    }
+
+    private static void writeRegion(Path path, byte[][] chunks, int[] stamps, int unsupportedIndex) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         byte[] header = new byte[8192];
         int sector = 2;
@@ -155,9 +235,10 @@ class IncrementalTest {
             header[at + 3] = (byte) stamps[i];
         }
         bytes.write(header);
-        for (byte[] chunk : chunks) if (chunk != null) {
+        for (int i = 0; i < chunks.length; i++) if (chunks[i] != null) {
+            byte[] chunk = chunks[i];
             DataOutputStream out = new DataOutputStream(bytes);
-            out.writeInt(chunk.length + 1); out.writeByte(3); out.write(chunk);
+            out.writeInt(chunk.length + 1); out.writeByte(i == unsupportedIndex ? 4 : 3); out.write(chunk);
             int padding = (4096 - (chunk.length + 5) % 4096) % 4096;
             bytes.write(new byte[padding]);
         }
