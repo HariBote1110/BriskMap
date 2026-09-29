@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, writeFile, rm, utimes } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { request } from 'node:http';
-import { inflateRawSync, deflateSync } from 'node:zlib';
+import { inflateRawSync, deflateSync, gunzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { cameraPosition, viewProjection, projectPoint } from '../camera.mjs';
@@ -88,6 +88,28 @@ test('server ranges and loader match whole-file decoder', async t => {
   const texture=await fetch(base+'/textures/atlas.png',{headers:{Range:'bytes=1-3'}});
   assert.equal(texture.status,206); assert.equal(texture.headers.get('cache-control'),'no-store'); assert.equal(texture.headers.get('content-type'),'image/png'); assert.deepEqual([...new Uint8Array(await texture.arrayBuffer())],[80,78,71]);
   const table=await fetch(base+'/textures/blocks.json'); assert.equal((await table.json()).format,1);
+  const jsonBytes=await readFile(join(textureRoot,'blocks.json'));
+  const getRaw=(path,headers={})=>new Promise((resolve,reject)=>{
+    const req=request(base+path,{headers},response=>{
+      const chunks=[];response.on('data',chunk=>chunks.push(chunk));response.on('end',()=>resolve({status:response.statusCode,headers:response.headers,body:Buffer.concat(chunks)}));
+    });req.on('error',reject);req.end();
+  });
+  const plain=await getRaw('/textures/blocks.json',{'Accept-Encoding':'identity'});
+  assert.equal(plain.status,200);assert.equal(plain.headers['content-encoding'],undefined);assert.deepEqual(plain.body,jsonBytes);
+  const zipped=await getRaw('/textures/blocks.json',{'Accept-Encoding':'br, gzip'});
+  assert.equal(zipped.status,200);assert.equal(zipped.headers['content-encoding'],'gzip');assert.equal(zipped.headers.vary,'Accept-Encoding');
+  assert.equal(Number(zipped.headers['content-length']),zipped.body.length);assert.deepEqual(gunzipSync(zipped.body),jsonBytes);
+  const jsonRange=await getRaw('/textures/blocks.json',{'Accept-Encoding':'gzip',Range:'bytes=0-19'});
+  assert.equal(jsonRange.status,206);assert.equal(jsonRange.headers['content-encoding'],undefined);assert.deepEqual(jsonRange.body,jsonBytes.subarray(0,20));
+  const pngRaw=await getRaw('/textures/atlas.png',{'Accept-Encoding':'gzip'});
+  assert.equal(pngRaw.headers['content-encoding'],undefined);assert.deepEqual(pngRaw.body,atlas);
+  const changedJson=Buffer.from(jsonBytes.toString().replace('synthetic.jar','updated.jar'));
+  await writeFile(join(textureRoot,'blocks.json'),changedJson);
+  await utimes(join(textureRoot,'blocks.json'),new Date(),new Date(Date.now()+10000));
+  const refreshed=await getRaw('/textures/blocks.json',{'Accept-Encoding':'gzip'});
+  assert.deepEqual(gunzipSync(refreshed.body),changedJson);
+
+
   const path='/data/r.0.0.b3d';
   const range=await fetch(base+path,{headers:{Range:'bytes=0-13'}});
   assert.equal(range.status,206); assert.match(range.headers.get('content-range'),/^bytes 0-13\//); assert.equal((await range.arrayBuffer()).byteLength,14);
