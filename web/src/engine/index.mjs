@@ -50,8 +50,7 @@ const chunkKey = (cx,cz) => `${cx},${cz}`;
 const pause = ms => new Promise(resolve => setTimeout(resolve,ms));
 
 function codedError(code,cause,fatal=false){
-  const message=cause===undefined?code:String(cause?.message??cause);
-  return Object.assign(new Error(message,cause===undefined?undefined:{cause}),{code,fatal});
+  return Object.assign(new Error(String(cause?.message??cause),{cause}),{code,fatal});
 }
 
 function freshStats(mode){
