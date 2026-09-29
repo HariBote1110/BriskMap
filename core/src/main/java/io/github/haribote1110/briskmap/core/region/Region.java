@@ -29,6 +29,10 @@ public final class Region {
         if (bytes.length < 8192) throw new IOException("Short region header");
     }
     public long size() { return bytes.length; }
+    public boolean present(int index) {
+        int at = index * 4;
+        return (bytes[at] != 0 || bytes[at + 1] != 0 || bytes[at + 2] != 0) && bytes[at + 3] != 0;
+    }
     public long timestamp(int index) {
         int at = 4096 + index * 4;
         return ((long)(bytes[at] & 255) << 24) | ((long)(bytes[at + 1] & 255) << 16)

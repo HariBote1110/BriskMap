@@ -44,9 +44,11 @@ public final class RegionExtractor {
         Reader oldThree = options.do3d() && incremental ? valid(threePath, 2, regionX, regionZ, options.flags()) : null;
         if (oldTwo != null && oldThree != null && !oldTwo.blocks.equals(oldThree.blocks)) oldThree = null;
         boolean[] changedTwo = new boolean[1024], changedThree = new boolean[1024];
+        long[] currentTimes = new long[1024];
         for (int i = 0; i < 1024; i++) {
-            changedTwo[i] = options.do2d() && (oldTwo == null || region.timestamp(i) != oldTwo.timestamps[i]);
-            changedThree[i] = options.do3d() && (oldThree == null || region.timestamp(i) != oldThree.timestamps[i]);
+            currentTimes[i] = region.present(i) ? region.timestamp(i) : 0;
+            changedTwo[i] = options.do2d() && (oldTwo == null || currentTimes[i] != oldTwo.timestamps[i]);
+            changedThree[i] = options.do3d() && (oldThree == null || currentTimes[i] != oldThree.timestamps[i]);
         }
         boolean[] affectedThree = Arrays.copyOf(changedThree, 1024);
         for (int i = 0; i < 1024; i++) if (changedThree[i]) {
@@ -67,9 +69,8 @@ public final class RegionExtractor {
         else if (oldThree != null) for (String state : oldThree.blocks) blocks.index(state);
         byte[][] two = options.do2d() ? new byte[1024][] : null;
         byte[][] three = options.do3d() ? new byte[1024][] : null;
-        long[] twoTimes = new long[1024], threeTimes = new long[1024];
-        if (oldTwo != null) for (int i = 0; i < 1024; i++) { two[i] = oldTwo.compressed(i); twoTimes[i] = oldTwo.timestamps[i]; }
-        if (oldThree != null) for (int i = 0; i < 1024; i++) { three[i] = oldThree.compressed(i); threeTimes[i] = oldThree.timestamps[i]; }
+        if (oldTwo != null) for (int i = 0; i < 1024; i++) two[i] = oldTwo.compressed(i);
+        if (oldThree != null) for (int i = 0; i < 1024; i++) three[i] = oldThree.compressed(i);
         BorderCache borders = null;
         Inflater inflater = INFLATER.get();
         long borderNs = 0;
@@ -90,18 +91,18 @@ public final class RegionExtractor {
         long shellBlocks = 0, blocksNonair = 0, shellFluidBlocks = 0, faces = 0;
         int minVersion = Integer.MAX_VALUE, maxVersion = Integer.MIN_VALUE;
         for (int i = 0; i < 1024; i++) {
-            if (!changedTwo[i] && !affectedThree[i]) { if (region.timestamp(i) != 0) reused++; continue; }
+            if (!changedTwo[i] && !affectedThree[i]) { if (region.present(i)) reused++; continue; }
             Chunk chunk;
             try { chunk = region.read(i, inflater); }
             catch (Region.UnsupportedChunkException ex) {
                 total++; unsupported++;
-                if (changedTwo[i]) { two[i] = null; twoTimes[i] = 0; }
-                if (affectedThree[i]) { three[i] = null; threeTimes[i] = 0; }
+                if (changedTwo[i]) two[i] = null;
+                if (affectedThree[i]) three[i] = null;
                 continue;
             }
             if (chunk == null) {
-                if (changedTwo[i]) { two[i] = null; twoTimes[i] = 0; }
-                if (affectedThree[i]) { three[i] = null; threeTimes[i] = 0; }
+                if (changedTwo[i]) two[i] = null;
+                if (affectedThree[i]) three[i] = null;
                 continue;
             }
             total++;
@@ -111,8 +112,8 @@ public final class RegionExtractor {
             maxVersion = Math.max(maxVersion, chunk.dataVersion);
             if (!"minecraft:full".equals(chunk.status)) {
                 notFull++;
-                if (changedTwo[i]) { two[i] = null; twoTimes[i] = 0; }
-                if (affectedThree[i]) { three[i] = null; threeTimes[i] = 0; }
+                if (changedTwo[i]) two[i] = null;
+                if (affectedThree[i]) three[i] = null;
                 continue;
             }
             extracted++;
@@ -123,7 +124,6 @@ public final class RegionExtractor {
                 tick = Clock.now();
                 two[i] = Format.compress(payload, deflater);
                 compressNs += Clock.now() - tick;
-                twoTimes[i] = region.timestamp(i);
             }
             if (affectedThree[i]) {
                 tick = Clock.now();
@@ -136,15 +136,18 @@ public final class RegionExtractor {
                 tick = Clock.now();
                 three[i] = Format.compress(payload, deflater);
                 compressNs += Clock.now() - tick;
-                threeTimes[i] = region.timestamp(i);
             }
         }
         tick = Clock.now();
-        long twoBytes = options.do2d() ? writeTwo ? Format.writeV3(twoPath, 1, regionX, regionZ, options.flags(), blocks, biomes, two, twoTimes) : Files.size(twoPath) : 0;
-        long threeBytes = options.do3d() ? writeThree ? Format.writeV3(threePath, 2, regionX, regionZ, options.flags(), blocks, null, three, threeTimes) : Files.size(threePath) : 0;
+        Format.WriteResult twoResult = writeTwo ? Format.writeV3IfChanged(twoPath, 1, regionX, regionZ, options.flags(), blocks, biomes, two, currentTimes) : null;
+        Format.WriteResult threeResult = writeThree ? Format.writeV3IfChanged(threePath, 2, regionX, regionZ, options.flags(), blocks, null, three, currentTimes) : null;
+        long twoBytes = options.do2d() ? writeTwo ? twoResult.bytes() : Files.size(twoPath) : 0;
+        long threeBytes = options.do3d() ? writeThree ? threeResult.bytes() : Files.size(threePath) : 0;
+        int outputFiles = (twoResult != null && twoResult.written() ? 1 : 0)
+                + (threeResult != null && threeResult.written() ? 1 : 0);
         long writeNs = Clock.now() - tick;
         return new RegionResult(total, extracted, notFull, unsupported, reused, twoBytes, threeBytes,
-                (writeTwo ? 1 : 0) + (writeThree ? 1 : 0), true,
+                outputFiles, outputFiles > 0,
                 minVersion == Integer.MAX_VALUE ? 0 : minVersion, maxVersion == Integer.MIN_VALUE ? 0 : maxVersion,
                 readNs, borderNs, inflateNs, parseNs, extract2dNs, extract3dNs, compressNs, writeNs,
                 shellBlocks, blocksNonair, shellFluidBlocks, faces);

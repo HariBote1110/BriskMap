@@ -79,6 +79,18 @@ public final class Format {
 
     public static long writeV3(Path path, int kind, int regionX, int regionZ, int flags,
             Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps) throws IOException {
+        return writeV3(path, kind, regionX, regionZ, flags, blocks, biomes, compressed, timestamps, false).bytes();
+    }
+
+    public record WriteResult(long bytes, boolean written) { }
+
+    public static WriteResult writeV3IfChanged(Path path, int kind, int regionX, int regionZ, int flags,
+            Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps) throws IOException {
+        return writeV3(path, kind, regionX, regionZ, flags, blocks, biomes, compressed, timestamps, true);
+    }
+
+    private static WriteResult writeV3(Path path, int kind, int regionX, int regionZ, int flags,
+            Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps, boolean skipIdentical) throws IOException {
         ByteArrayOutputStream header = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(header);
         out.write(new byte[]{'B', 'R', 'S', 'K'});
@@ -101,8 +113,10 @@ public final class Format {
                 for (long timestamp : timestamps) trailer.writeInt((int) timestamp);
                 trailer.write(new byte[]{'B', 'R', 'S', 'T'});
             }
+            if (skipIdentical && Files.isRegularFile(path) && Files.mismatch(temp, path) == -1)
+                return new WriteResult(Files.size(path), false);
             Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } finally { Files.deleteIfExists(temp); }
-        return Files.size(path);
+        return new WriteResult(Files.size(path), true);
     }
 }
