@@ -82,6 +82,8 @@ export function chromeArguments(port, profile, { headless = false, chromeFlags =
 }
 
 export async function launchChrome(binary, options = {}) {
+  if (typeof globalThis.WebSocket === 'undefined')
+    throw new Error('Node 22+ or --experimental-websocket is required (global WebSocket missing)');
   const port = await freePort();
   const profile = mkdtempSync(join(tmpdir(), 'clientbench-'));
   const flags = chromeArguments(port, profile, options);

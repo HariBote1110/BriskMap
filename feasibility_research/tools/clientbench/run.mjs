@@ -1,4 +1,4 @@
-import { readFileSync, appendFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, readdirSync, appendFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,13 @@ import { launchChrome } from './cdp.mjs';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const base = dirname(fileURLToPath(import.meta.url));
 const zeroCpu = () => ({ total: 0, byType: {} });
+const clockTicks = (() => {
+  if (process.platform !== 'linux') return 100;
+  try {
+    const value = Number(execFileSync('getconf', ['CLK_TCK'], { encoding: 'utf8' }).trim());
+    return Number.isFinite(value) && value > 0 ? value : 100;
+  } catch { return 100; }
+})();
 
 export function parsePsTime(value) {
   const [clock, dayText] = value.includes('-') ? [value.split('-')[1], value.split('-')[0]] : [value, '0'];
@@ -37,8 +44,52 @@ export function collectProcessCpu(listing, rootPid) {
   return result;
 }
 
+export function parseProcStat(stat) {
+  const match = /^(\d+) \(/.exec(stat);
+  const end = stat.lastIndexOf(')');
+  if (!match || end < match[0].length) throw new Error('Invalid proc stat');
+  const fields = stat.slice(end + 1).trim().split(/\s+/);
+  const pid = Number(match[1]);
+  const ppid = Number(fields[1]);
+  const utime = Number(fields[11]);
+  const stime = Number(fields[12]);
+  if (fields.length < 13 || ![pid, ppid, utime, stime].every(Number.isSafeInteger)) throw new Error('Invalid proc stat');
+  return { pid, ppid, ticks: utime + stime };
+}
+
+export function collectProcCpu(entries, rootPid, ticksPerSecond) {
+  const rows = entries.map(({ stat, cmdline }) => ({ ...parseProcStat(stat), cmdline }));
+  const descendants = new Set([Number(rootPid)]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const row of rows) if (descendants.has(row.ppid) && !descendants.has(row.pid)) { descendants.add(row.pid); changed = true; }
+  }
+  const result = zeroCpu();
+  for (const row of rows) {
+    if (!descendants.has(row.pid)) continue;
+    const type = row.pid === Number(rootPid) ? 'browser' : /(?:^|\0)--type=([^\0]+)/.exec(row.cmdline)?.[1] ?? 'other';
+    const ms = Math.round(row.ticks * 1000 / ticksPerSecond);
+    result.total += ms;
+    result.byType[type] = (result.byType[type] ?? 0) + ms;
+  }
+  return result;
+}
+
 export function sampleCpu(pid) {
-  try { return collectProcessCpu(execFileSync('ps', ['-A', '-o', 'pid=,ppid=,time=,command='], { encoding: 'utf8' }), pid); }
+  try {
+    if (process.platform === 'linux') {
+      const entries = [];
+      for (const name of readdirSync('/proc')) {
+        if (!/^\d+$/.test(name)) continue;
+        try {
+          entries.push({ stat: readFileSync(`/proc/${name}/stat`, 'utf8'), cmdline: readFileSync(`/proc/${name}/cmdline`, 'utf8') });
+        } catch { /* Processes may exit during sampling. */ }
+      }
+      return collectProcCpu(entries, pid, clockTicks);
+    }
+    return collectProcessCpu(execFileSync('ps', ['-A', '-o', 'pid=,ppid=,time=,command='], { encoding: 'utf8' }), pid);
+  }
   catch { return zeroCpu(); }
 }
 
