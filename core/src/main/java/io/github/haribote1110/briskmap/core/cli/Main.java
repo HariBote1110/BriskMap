@@ -2,12 +2,32 @@ package io.github.haribote1110.briskmap.core.cli;
 
 import io.github.haribote1110.briskmap.core.ExtractOptions;
 import io.github.haribote1110.briskmap.core.WorldExtractor;
+import io.github.haribote1110.briskmap.core.textures.TextureBuilder;
 import java.nio.file.Path;
 
 public final class Main {
     private Main() { }
 
     public static void main(String[] args) throws Exception {
+        if (args.length > 0 && args[0].equals("textures")) {
+            Path jar = null, out = null;
+            for (int i = 1; i < args.length; i++) {
+                String option = args[i];
+                if (++i >= args.length) throw new IllegalArgumentException("Missing value for " + option);
+                switch (option) {
+                    case "--jar" -> jar = Path.of(args[i]);
+                    case "--out" -> out = Path.of(args[i]);
+                    default -> throw new IllegalArgumentException("Unknown option " + option);
+                }
+            }
+            if (jar == null || out == null) throw new IllegalArgumentException("Usage: textures --jar PATH --out DIR");
+            TextureBuilder.Summary summary = TextureBuilder.build(jar, out);
+            System.out.println("{\"blocks\":" + summary.blocks() + ",\"entries\":" + summary.entries()
+                    + ",\"unknown\":" + summary.unknown() + ",\"fallback\":" + summary.fallback()
+                    + ",\"layers\":" + summary.layers() + ",\"atlasBytes\":" + summary.atlasBytes()
+                    + ",\"ms\":" + summary.ms() + "}");
+            return;
+        }
         Path input = null, output = null;
         String caves = "hide", fluids = "surface", mode = "both";
         int threads = Runtime.getRuntime().availableProcessors(), level = 6;
