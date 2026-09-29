@@ -26,7 +26,33 @@
 
 ## 手順
 
-（構築後に記入）
+### 構築（2026-09-29）
+
+- LXC 118 `briskmap-phone`（Rumoi、192.168.0.236）: Debian 13、4 コア・cpulimit 1.6、メモリ 3GB、スワップなし、非特権、nesting=1
+- Chromium 154.0.8037.57（Debian パッケージ）、Node 20.19.2、Mesa（radeonsi / RADV）
+- 内蔵 GPU: Rumoi ホストで `pct set 118 -dev0 /dev/dri/renderD128,mode=0666`（API トークンでは設定できず、ホストの root で実行）
+- **CPU 制限の確認:** Node の忙しいループで 5 秒測定。1 スレッド: CPU 5,045 ms（制限されない）。4 スレッド: CPU 8,201 ms ＝ 1.64 コア分（設計どおり）。
+- **ヘッドレス Chromium で GPU を使う方法:** `--use-angle=gl-egl --use-gl=angle` で `ANGLE (AMD, AMD Radeon Graphics (radeonsi renoir ACO DRM 3.64 6.17.2-1-pve), OpenGL ES 3.2)`。`--use-angle=vulkan`（ozone 指定なし）・`--use-angle=gl`・`--use-gl=egl` では WebGL2 が使えなかった。`--ozone-platform=headless --use-angle=vulkan --use-vulkan=native` は RADV で動く（今回は未使用）。
+- ソフトウェア描画: `--use-angle=swiftshader --enable-unsafe-swiftshader` → `SwiftShader Device (Subzero)`
+
+### 測定
+
+```
+NODE_OPTIONS=--experimental-websocket node run.mjs --chrome /usr/bin/chromium --headless --mobile \
+  --label phone-sw|phone-gpu --settle-timeout-ms 300000 --chrome-flags "<上記>" \
+  --scenarios scenarios-A.json --runs 3 --out results-phone-<sw|gpu>.jsonl
+```
+（`/opt/phone/run-all.sh`。ソフトウェア描画 → GPU の順）
+
+### 準備中の失敗と対処
+
+- **Node 20 には標準の `WebSocket` が無い。** ハーネスのテストがコンテナ内で約 7 時間 40 分止まり続けた（親が待ち処理の時間切れを見落とした）。`--experimental-websocket`（`NODE_OPTIONS` 経由）で解決。`WebSocket` が無いときは止まらずにエラーを出すよう修正。
+- **Linux の `ps` は CPU 時間が秒単位。** `/proc/<pid>/stat` から 10ms 単位で読むよう修正。
+- 既知の問題: コンテナ内（Node 20）で、ハーネスのテスト 18 件中 1 件（10 秒の期限切れを待つテスト）が止まる。測定には影響しない。
+
+### 試行（1 回、BriskMap のみ、斜め視点、ソフトウェア描画、修正前の秒単位 CPU）
+
+読み込み完了 6.5 秒、カメラ 1 周中 0.92 fps（p50 983 ms）。CPU のほとんどが GPU プロセス（ソフトウェア描画）。
 
 ## 結果
 
