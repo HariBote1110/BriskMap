@@ -5,3 +5,12 @@ api-version: '1.21'
 description: Lightweight web map that extracts surfaces instead of rendering them.
 authors: [HariBote1110]
 website: https://github.com/HariBote1110/BriskMap
+commands:
+  briskmap:
+    description: Manage BriskMap extraction and web serving.
+    usage: /briskmap <status|scan [world]|rebuild <world>|reload>
+    permission: briskmap.admin
+permissions:
+  briskmap.admin:
+    description: Manage BriskMap.
+    default: op
