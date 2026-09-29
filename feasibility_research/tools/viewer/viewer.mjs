@@ -4,7 +4,7 @@ import { resolveMaterials } from '../mesher/src/materials.mjs';
 import { colourFor } from '../mesher/src/colour.mjs';
 
 const canvas=document.querySelector('canvas'),status=document.querySelector('#status');
-const stats=window.__briskStats={chunks_selected:0,chunks_loaded:0,regions:0,requests:0,bytes_fetched:0,quads:0,vertex_bytes:0,index_bytes:0,texture_upload_bytes:0,t_textures_done_ms:null,t_first_byte_ms:null,t_fetch_done_ms:null,t_mesh_done_ms:null,t_upload_done_ms:null};
+const stats=window.__briskStats={chunks_selected:0,chunks_loaded:0,regions:0,requests:0,bytes_fetched:0,quads:0,vertex_bytes:0,index_bytes:0,texture_upload_bytes:0,t_textures_done_ms:null,t_blocks_json_done_ms:null,t_atlas_decoded_ms:null,texture_upload_ms:null,t_first_byte_ms:null,t_fetch_done_ms:null,t_mesh_done_ms:null,t_upload_done_ms:null};
 window.__briskReady=false;window.__briskError=null;
 const params=new URLSearchParams(location.search);
 const numeric=(name,fallback)=>Number(params.get(name)??fallback);
@@ -74,13 +74,19 @@ function uploadTextures(gl,table,bitmap){
   if(table.format!==1||table.tile!==16||!Number.isInteger(table.layers)||table.layers<1||table.textures?.length!==table.layers||bitmap.width!==16||bitmap.height!==16*table.layers||table.layers>gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS)||table.layers>gl.getParameter(gl.MAX_TEXTURE_SIZE))throw new Error('Invalid atlas dimensions');
   const texture=gl.createTexture();gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D_ARRAY,texture);
   gl.texStorage3D(gl.TEXTURE_2D_ARRAY,5,gl.RGBA8,16,16,table.layers);
-  const canvas=new OffscreenCanvas(16,16),context=canvas.getContext('2d',{alpha:true});
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
   gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL,gl.NONE);
-  for(let layer=0;layer<table.layers;layer++){
-    context.clearRect(0,0,16,16);
-    context.drawImage(bitmap,0,layer*16,16,16,0,0,16,16);
-    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY,0,0,0,layer,16,16,1,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
+  if(new URLSearchParams(location.search).get('texupload')==='layers'){
+    // Previous path: one 2D-canvas copy and upload per layer (kept for comparison).
+    const canvas=new OffscreenCanvas(16,16),context=canvas.getContext('2d',{alpha:true});
+    for(let layer=0;layer<table.layers;layer++){
+      context.clearRect(0,0,16,16);
+      context.drawImage(bitmap,0,layer*16,16,16,0,0,16,16);
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY,0,0,0,layer,16,16,1,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
+    }
+  }else{
+    // WebGL2 slices a vertically stacked image source into `depth` layers of `height` rows each.
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY,0,0,0,0,16,16,table.layers,gl.RGBA,gl.UNSIGNED_BYTE,bitmap);
   }
   gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
   gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_MIN_FILTER,gl.NEAREST_MIPMAP_LINEAR);
@@ -103,7 +109,7 @@ async function main(){
   const program=programme(gl),matrixLocation=gl.getUniformLocation(program,'viewProjectionMatrix'),offsetLocation=gl.getUniformLocation(program,'chunkOffset');
   gl.useProgram(program);gl.uniform1i(gl.getUniformLocation(program,'tileArray'),0);gl.uniform1i(gl.getUniformLocation(program,'flatColours'),1);gl.uniform1i(gl.getUniformLocation(program,'flatShading'),shading==='flat'?1:0);
   const textureUrl=texturePrefix.endsWith('/')?texturePrefix:`${texturePrefix}/`;
-  const texturePromise=Promise.all([fetch(`${textureUrl}blocks.json`).then(response=>{if(!response.ok)throw new Error(`blocks.json: HTTP ${response.status}`);return response.json();}),fetch(`${textureUrl}atlas.png`).then(async response=>{if(!response.ok)throw new Error(`atlas.png: HTTP ${response.status}`);return createImageBitmap(await response.blob(),{premultiplyAlpha:'none',colorSpaceConversion:'none'});})]).then(([table,bitmap])=>{try{stats.texture_upload_bytes=uploadTextures(gl,table,bitmap);stats.t_textures_done_ms=performance.now();return table;}finally{bitmap.close();}});
+  const texturePromise=Promise.all([fetch(`${textureUrl}blocks.json`).then(response=>{if(!response.ok)throw new Error(`blocks.json: HTTP ${response.status}`);return response.json().then(table=>{stats.t_blocks_json_done_ms=performance.now();return table;});}),fetch(`${textureUrl}atlas.png`).then(async response=>{if(!response.ok)throw new Error(`atlas.png: HTTP ${response.status}`);const bitmap=await createImageBitmap(await response.blob(),{premultiplyAlpha:'none',colorSpaceConversion:'none'});stats.t_atlas_decoded_ms=performance.now();return bitmap;})]).then(([table,bitmap])=>{try{const uploadStart=performance.now();stats.texture_upload_bytes=uploadTextures(gl,table,bitmap);stats.texture_upload_ms=performance.now()-uploadStart;stats.t_textures_done_ms=performance.now();return table;}finally{bitmap.close();}});
   gl.enable(gl.DEPTH_TEST);gl.enable(gl.CULL_FACE);gl.cullFace(gl.BACK);gl.clearColor(125/255,171/255,1,1);
   const selected=selectChunks(camera.x,camera.z,radius);stats.chunks_selected=selected.length;
   const groups=new Map();for(const chunk of selected){const key=`${chunk.rx},${chunk.rz}`;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(chunk);}
