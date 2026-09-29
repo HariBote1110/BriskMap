@@ -22,6 +22,8 @@
         "feasibility_research/tools",
         "--data",
         "feasibility_research/output/real/hide-surface",
+        "--textures",
+        "feasibility_research/output/textures/26.3",
         "--port",
         "8200"
       ],

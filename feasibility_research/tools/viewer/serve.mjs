@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
-import { realpath, stat } from 'node:fs/promises';
+import { realpath, stat, readFile } from 'node:fs/promises';
+import { gzipSync } from 'node:zlib';
 import { resolve, relative, extname, sep } from 'node:path';
 
 const args=process.argv.slice(2);
@@ -10,6 +11,17 @@ const data=await realpath(option('data',process.cwd()));
 const texturesOption=option('textures',null),textures=texturesOption?await realpath(texturesOption):null;
 const port=Number(option('port','8200')),host=option('host','0.0.0.0');
 if(!Number.isInteger(port)||port<0||port>65535)throw new Error('Invalid port');
+const gzipCache=new Map(),gzipKeys=new Map();
+async function compressedJson(filename,mtimeMs){
+  const key=`${filename}\0${mtimeMs}`;
+  let pending=gzipCache.get(key);
+  if(!pending){
+    const previous=gzipKeys.get(filename);if(previous)gzipCache.delete(previous);
+    pending=readFile(filename).then(bytes=>gzipSync(bytes,{level:6}));
+    gzipCache.set(key,pending);gzipKeys.set(filename,key);
+  }
+  try{return await pending;}catch(error){gzipCache.delete(key);if(gzipKeys.get(filename)===key)gzipKeys.delete(filename);throw error;}
+}
 const types={'.html':'text/html; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.wasm':'application/wasm','.b3d':'application/octet-stream','.png':'image/png'};
 
 createServer(async(req,res)=>{
@@ -33,6 +45,12 @@ createServer(async(req,res)=>{
     catch{res.writeHead(404,headers).end();return;}
     headers['Content-Type']=types[extname(filename)]??'application/octet-stream';
     const size=info.size,range=req.headers.range;
+    const acceptsGzip=(req.headers['accept-encoding']??'').split(',').some(value=>/^gzip(?:\s*;|$)/i.test(value.trim()));
+    if(extname(filename)==='.json'&&range===undefined&&acceptsGzip){
+      const compressed=await compressedJson(filename,info.mtimeMs);
+      headers['Content-Encoding']='gzip';headers['Vary']='Accept-Encoding';headers['Content-Length']=compressed.byteLength;
+      res.writeHead(200,headers);res.end(req.method==='HEAD'?undefined:compressed);return;
+    }
     let start=0,end=size-1,status=200;
     if(range!==undefined){
       const match=/^bytes=(\d*)-(\d*)$/.exec(range);
