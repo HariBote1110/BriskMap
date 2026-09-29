@@ -1,5 +1,3 @@
-import { colourTable } from './colour.mjs';
-
 export async function decodeRegion(source, inflate) {
   const bytes = source instanceof Uint8Array ? source : new Uint8Array(source);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -56,5 +54,5 @@ export async function decodeRegion(source, inflate) {
     if (cursor.offset !== data.length) throw new Error('Trailing chunk bytes');
     chunks.push({ index: i, positions: Uint32Array.from(positions), paletteIndices: Uint32Array.from(paletteIndices), masks: Uint8Array.from(masks) });
   }
-  return { x: view.getInt32(6, false), z: view.getInt32(10, false), palette, colours: colourTable(palette), chunks };
+  return { x: view.getInt32(6, false), z: view.getInt32(10, false), palette, chunks };
 }

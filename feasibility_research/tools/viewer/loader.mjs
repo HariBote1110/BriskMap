@@ -1,5 +1,3 @@
-import { colourTable } from '../mesher/src/colour.mjs';
-
 export function selectChunks(x, z, radius) {
   if (![x,z,radius].every(Number.isFinite) || radius < 0) throw new Error('Invalid selection parameters');
   const chunks = [];
@@ -55,7 +53,7 @@ function parseHeader(bytes) {
   if(dataStart>bytes.length)return {needed:dataStart};
   const index=[];
   for(let i=0;i<1024;i++){const start=view.getUint32(offset+i*8,false),length=view.getUint32(offset+i*8+4,false);if((start===0)!==(length===0)||length && start<dataStart)throw new Error(`Invalid chunk index ${i}`);index.push({index:i,start,length});}
-  return {x:view.getInt32(6,false),z:view.getInt32(10,false),palette,colours:colourTable(palette),index,dataStart};
+  return {x:view.getInt32(6,false),z:view.getInt32(10,false),palette,index,dataStart};
 }
 
 export async function loadRegionHeader(url,options={}) {

@@ -2,6 +2,7 @@ const display = document.getElementById('result');
 const params = new URLSearchParams(location.search);
 const count = Number(params.get('regions') ?? Infinity);
 const impl = params.get('impl') ?? 'js', mode = params.get('mode') ?? 'culled';
+const blocksUrl = params.get('blocks');
 const workerCounts = (params.get('workers') ?? '1,2,4,8').split(',').map(Number);
 const passes = Number(params.get('passes') ?? 5);
 const median = values => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
@@ -17,6 +18,7 @@ async function run() {
   if (!['js', 'wasm'].includes(impl) || !['culled', 'greedy'].includes(mode) || !Number.isInteger(passes) || passes < 1 || workerCounts.some(n => !Number.isInteger(n) || n < 1)) throw new Error('Invalid query parameters');
   const files = (await requireResponse(await fetch('/data/index.json')).json()).slice(0, count);
   if (!files.length) throw new Error('No .b3d region files');
+  const materialTable = blocksUrl ? await requireResponse(await fetch(blocksUrl)).json() : null;
   const report = { impl, mode, regions: files.length, passes, hardwareConcurrency: navigator.hardwareConcurrency, userAgent: navigator.userAgent, results: [] };
   for (const workerCount of workerCounts) {
     const workers = Array.from({ length: workerCount }, () => new Worker('./worker.mjs', { type: 'module' }));
@@ -25,7 +27,7 @@ async function run() {
       await Promise.all(next.map(take => take()));
       const regionBytes = await Promise.all(files.map(async file => (await requireResponse(await fetch(`/data/${encodeURIComponent(file)}`))).arrayBuffer()));
       const decodeStart = performance.now();
-      for (let i = 0; i < files.length; i++) workers[i % workerCount].postMessage({ type: 'decode', id: i, bytes: regionBytes[i] }, [regionBytes[i]]);
+      for (let i = 0; i < files.length; i++) workers[i % workerCount].postMessage({ type: 'decode', id: i, bytes: regionBytes[i], materialTable }, [regionBytes[i]]);
       const decoded = await Promise.all(workers.map(async (_, wi) => {
         const regions = [];
         for (let i = wi; i < files.length; i += workerCount) regions.push(await next[wi]());

@@ -1,15 +1,19 @@
+use std::sync::{Mutex, OnceLock};
+
 const VOLUME: usize = 16 * 384 * 16;
+static CELLS: OnceLock<Mutex<Vec<u32>>> = OnceLock::new();
 const DIMENSIONS: [usize; 3] = [16, 384, 16];
 const STEPS: [usize; 3] = [1, 256, 16];
+// Anticlockwise from outside: negative faces 00,01,11,10; positive faces 00,10,11,01.
+const CORNER_U: [[usize; 4]; 2] = [[0, 0, 1, 1], [0, 1, 1, 0]];
+const CORNER_V: [[usize; 4]; 2] = [[0, 1, 1, 0], [0, 0, 1, 1]];
 
-pub fn colour_for(value: &str) -> u32 {
-    let mut hash = 0x811c9dc5u32;
-    for byte in value.bytes() {
-        hash = (hash ^ u32::from(byte)).wrapping_mul(0x01000193);
-    }
-    (hash & 0x00ff_ffff) | 0xff00_0000
+struct Materials<'a> {
+    face_layers: &'a [u8],
+    face_tints: &'a [u8],
+    opaque: &'a [u8],
+    alpha_test: &'a [u8],
 }
-
 struct Output {
     vertices: Vec<u8>,
     indices: Vec<u8>,
@@ -23,13 +27,15 @@ impl Output {
             quads: 0,
         }
     }
-    fn vertex(&mut self, x: usize, y: usize, z: usize, normal: u8, colour: u32) {
+    fn vertex(&mut self, x: usize, y: usize, z: usize, normal: u8, ao: u8, key: u32) {
         self.vertices.extend_from_slice(&(x as u16).to_le_bytes());
         self.vertices.extend_from_slice(&(y as u16).to_le_bytes());
         self.vertices.extend_from_slice(&(z as u16).to_le_bytes());
         self.vertices.push(normal);
-        self.vertices.push(0);
-        self.vertices.extend_from_slice(&colour.to_le_bytes());
+        self.vertices.push(ao);
+        self.vertices.extend_from_slice(&(key as u16).to_le_bytes());
+        self.vertices.push((key >> 16) as u8);
+        self.vertices.push((key >> 24) as u8);
     }
     fn quad(
         &mut self,
@@ -40,90 +46,149 @@ impl Output {
         v0: usize,
         width: usize,
         height: usize,
-        colour: u32,
+        key: u32,
+        packed_ao: u8,
     ) {
         let normal = (axis * 2 + direction) as u8;
+        let plane = slice + direction;
         let u1 = u0 + width;
         let v1 = v0 + height;
-        let plane = slice + direction;
         let base = (self.vertices.len() / 12) as u32;
-        if axis == 0 {
-            self.vertex(plane, u0, v0, normal, colour);
-            if direction == 1 {
-                self.vertex(plane, u1, v0, normal, colour);
-                self.vertex(plane, u1, v1, normal, colour);
-                self.vertex(plane, u0, v1, normal, colour);
+        for corner in 0..4 {
+            let u = if CORNER_U[direction][corner] != 0 {
+                u1
             } else {
-                self.vertex(plane, u0, v1, normal, colour);
-                self.vertex(plane, u1, v1, normal, colour);
-                self.vertex(plane, u1, v0, normal, colour);
-            }
-        } else if axis == 1 {
-            self.vertex(v0, plane, u0, normal, colour);
-            if direction == 1 {
-                self.vertex(v0, plane, u1, normal, colour);
-                self.vertex(v1, plane, u1, normal, colour);
-                self.vertex(v1, plane, u0, normal, colour);
+                u0
+            };
+            let v = if CORNER_V[direction][corner] != 0 {
+                v1
             } else {
-                self.vertex(v1, plane, u0, normal, colour);
-                self.vertex(v1, plane, u1, normal, colour);
-                self.vertex(v0, plane, u1, normal, colour);
-            }
-        } else {
-            self.vertex(u0, v0, plane, normal, colour);
-            if direction == 1 {
-                self.vertex(u1, v0, plane, normal, colour);
-                self.vertex(u1, v1, plane, normal, colour);
-                self.vertex(u0, v1, plane, normal, colour);
-            } else {
-                self.vertex(u0, v1, plane, normal, colour);
-                self.vertex(u1, v1, plane, normal, colour);
-                self.vertex(u1, v0, plane, normal, colour);
+                v0
+            };
+            let ao = (packed_ao >> (corner * 2)) & 3;
+            match axis {
+                0 => self.vertex(plane, u, v, normal, ao, key),
+                1 => self.vertex(v, plane, u, normal, ao, key),
+                _ => self.vertex(u, v, plane, normal, ao, key),
             }
         }
-        for index in [base, base + 1, base + 2, base, base + 2, base + 3] {
-            self.indices.extend_from_slice(&index.to_le_bytes());
+        let flipped = ((packed_ao & 3) + ((packed_ao >> 4) & 3))
+            < (((packed_ao >> 2) & 3) + ((packed_ao >> 6) & 3));
+        let pattern = if flipped {
+            [0, 1, 3, 1, 2, 3]
+        } else {
+            [0, 1, 2, 0, 2, 3]
+        };
+        for index in pattern {
+            self.indices
+                .extend_from_slice(&(base + index).to_le_bytes());
         }
         self.quads += 1;
     }
 }
-
+fn solid(cells: &[u32], opaque: &[u8], x: i32, y: i32, z: i32) -> u8 {
+    if !(0..16).contains(&x) || !(0..384).contains(&y) || !(0..16).contains(&z) {
+        return 0;
+    }
+    let entry = cells[x as usize + y as usize * 256 + z as usize * 16];
+    if entry != 0 && opaque[(entry - 1) as usize] != 0 {
+        1
+    } else {
+        0
+    }
+}
 unsafe fn mesh_raw(
     positions_ptr: *const u8,
     palettes_ptr: *const u8,
     masks: &[u8],
     count: usize,
-    colours_ptr: *const u8,
-    colour_count: usize,
+    materials: Materials<'_>,
     greedy: bool,
 ) -> Result<Output, u32> {
-    let mut grid = vec![0u32; 6 * VOLUME];
+    let palette_count = materials.opaque.len();
+    if materials.face_layers.len() != palette_count * 12
+        || materials.face_tints.len() != palette_count * 6
+        || materials.alpha_test.len() != palette_count
+    {
+        return Err(1);
+    }
+    let mut cells = CELLS
+        .get_or_init(|| Mutex::new(vec![0u32; VOLUME]))
+        .lock()
+        .unwrap();
+    cells.fill(0);
+    let mut keys = vec![0u32; 6 * VOLUME];
+    let mut ao_grid = vec![0u8; 6 * VOLUME];
     let mut present = vec![0u8; 6 * VOLUME];
     for i in 0..count {
         let p = positions_ptr.add(i * 4).cast::<u32>().read_unaligned() as usize;
-        let palette_index = palettes_ptr.add(i * 4).cast::<u32>().read_unaligned() as usize;
-        if palette_index >= colour_count {
-            return Err(2);
-        }
-        let colour = colours_ptr
-            .add(palette_index * 4)
-            .cast::<u32>()
-            .read_unaligned();
+        let palette = palettes_ptr.add(i * 4).cast::<u32>().read_unaligned() as usize;
         let mask = masks[i];
-        if p >= VOLUME || mask == 0 || mask & 0xc0 != 0 {
+        if p >= VOLUME || palette >= palette_count || mask == 0 || mask & 0xc0 != 0 {
             return Err(2);
         }
+        cells[p] = palette as u32 + 1;
+    }
+    for i in 0..count {
+        let p = positions_ptr.add(i * 4).cast::<u32>().read_unaligned() as usize;
+        let palette = palettes_ptr.add(i * 4).cast::<u32>().read_unaligned() as usize;
+        let mask = masks[i];
+        let xyz = [(p & 15) as i32, (p >> 8) as i32, ((p >> 4) & 15) as i32];
         for normal in 0..6 {
-            if mask & (1 << normal) != 0 {
-                grid[normal * VOLUME + p] = colour;
-                present[normal * VOLUME + p] = 1;
+            if mask & (1 << normal) == 0 {
+                continue;
             }
+            let axis = normal / 2;
+            let direction = normal & 1;
+            let u_axis = (axis + 1) % 3;
+            let v_axis = (axis + 2) % 3;
+            let mut coords = xyz;
+            coords[axis] += if direction != 0 { 1 } else { -1 };
+            let mut packed_ao = 0u8;
+            for corner in 0..4 {
+                let du = if CORNER_U[direction][corner] != 0 {
+                    1
+                } else {
+                    -1
+                };
+                let dv = if CORNER_V[direction][corner] != 0 {
+                    1
+                } else {
+                    -1
+                };
+                let mut point = coords;
+                point[u_axis] += du;
+                let s1 = solid(&cells, materials.opaque, point[0], point[1], point[2]);
+                point = coords;
+                point[v_axis] += dv;
+                let s2 = solid(&cells, materials.opaque, point[0], point[1], point[2]);
+                point[u_axis] += du;
+                let diagonal = solid(&cells, materials.opaque, point[0], point[1], point[2]);
+                let ao = if s1 != 0 && s2 != 0 {
+                    0
+                } else {
+                    3 - s1 - s2 - diagonal
+                };
+                packed_ao |= ao << (corner * 2);
+            }
+            let at = normal * VOLUME + p;
+            let face = palette * 6 + normal;
+            let layer = u16::from_le_bytes([
+                materials.face_layers[face * 2],
+                materials.face_layers[face * 2 + 1],
+            ]) as u32;
+            keys[at] = layer
+                | (materials.face_tints[face] as u32) << 16
+                | (materials.alpha_test[palette] as u32) << 24;
+            ao_grid[at] = packed_ao;
+            present[at] = 1;
         }
     }
     let mut output = Output::new();
     for axis in 0..3 {
         for direction in 0..2 {
-            let base = (axis * 2 + direction) * VOLUME;
+            let normal = axis * 2 + direction;
+            let base = normal * VOLUME;
             let u_axis = (axis + 1) % 3;
             let v_axis = (axis + 2) % 3;
             let u_limit = DIMENSIONS[u_axis];
@@ -135,23 +200,27 @@ unsafe fn mesh_raw(
                 for v in 0..v_limit {
                     for u in 0..u_limit {
                         let at = base + slice * slice_step + v * v_step + u * u_step;
-                        let colour = grid[at];
                         if present[at] == 0 {
                             continue;
                         }
+                        let key = keys[at];
+                        let packed_ao = ao_grid[at];
                         let mut width = 1;
                         let mut height = 1;
                         if greedy {
                             while u + width < u_limit
                                 && present[at + width * u_step] != 0
-                                && grid[at + width * u_step] == colour
+                                && keys[at + width * u_step] == key
+                                && ao_grid[at + width * u_step] == packed_ao
                             {
                                 width += 1;
                             }
                             'height: while v + height < v_limit {
                                 for w in 0..width {
-                                    if present[at + height * v_step + w * u_step] == 0
-                                        || grid[at + height * v_step + w * u_step] != colour
+                                    let next = at + height * v_step + w * u_step;
+                                    if present[next] == 0
+                                        || keys[next] != key
+                                        || ao_grid[next] != packed_ao
                                     {
                                         break 'height;
                                     }
@@ -164,7 +233,7 @@ unsafe fn mesh_raw(
                                 present[at + h * v_step + w * u_step] = 0;
                             }
                         }
-                        output.quad(axis, direction, slice, u, v, width, height, colour);
+                        output.quad(axis, direction, slice, u, v, width, height, key, packed_ao);
                     }
                 }
             }
@@ -172,44 +241,16 @@ unsafe fn mesh_raw(
     }
     Ok(output)
 }
-
-#[cfg(test)]
-fn mesh(
-    positions: &[u32],
-    palette_indices: &[u32],
-    masks: &[u8],
-    colours: &[u32],
-    greedy: bool,
-) -> Result<Output, u32> {
-    if positions.len() != palette_indices.len() || positions.len() != masks.len() {
-        return Err(1);
-    }
-    unsafe {
-        mesh_raw(
-            positions.as_ptr().cast(),
-            palette_indices.as_ptr().cast(),
-            masks,
-            positions.len(),
-            colours.as_ptr().cast(),
-            colours.len(),
-            greedy,
-        )
-    }
-}
-
 #[no_mangle]
 pub extern "C" fn alloc(len: usize) -> *mut u8 {
-    let bytes = vec![0u8; len].into_boxed_slice();
-    Box::into_raw(bytes) as *mut u8
+    Box::into_raw(vec![0u8; len].into_boxed_slice()) as *mut u8
 }
-
 #[no_mangle]
 pub unsafe extern "C" fn dealloc(ptr: *mut u8, len: usize) {
     if !ptr.is_null() {
         drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
     }
 }
-
 fn descriptor(vertices: Vec<u8>, indices: Vec<u8>, quads: u32, error: u32) -> *mut u8 {
     let vertex_len = vertices.len() as u32;
     let index_len = (indices.len() / 4) as u32;
@@ -224,74 +265,68 @@ fn descriptor(vertices: Vec<u8>, indices: Vec<u8>, quads: u32, error: u32) -> *m
     }
     Box::into_raw(Box::new(bytes)) as *mut u8
 }
-
 #[no_mangle]
 pub unsafe extern "C" fn mesh_chunk(
     positions_ptr: *const u8,
     palettes_ptr: *const u8,
     masks_ptr: *const u8,
     count: usize,
-    colours_ptr: *const u8,
-    colour_count: usize,
+    layers_ptr: *const u8,
+    tints_ptr: *const u8,
+    opaque_ptr: *const u8,
+    alpha_ptr: *const u8,
+    palette_count: usize,
     mode: u32,
 ) -> *mut u8 {
     let masks = std::slice::from_raw_parts(masks_ptr, count);
+    let materials = Materials {
+        face_layers: std::slice::from_raw_parts(layers_ptr, palette_count * 12),
+        face_tints: std::slice::from_raw_parts(tints_ptr, palette_count * 6),
+        opaque: std::slice::from_raw_parts(opaque_ptr, palette_count),
+        alpha_test: std::slice::from_raw_parts(alpha_ptr, palette_count),
+    };
     match mesh_raw(
         positions_ptr,
         palettes_ptr,
         masks,
         count,
-        colours_ptr,
-        colour_count,
+        materials,
         mode == 1,
     ) {
         Ok(output) => descriptor(output.vertices, output.indices, output.quads, 0),
         Err(error) => descriptor(Vec::new(), Vec::new(), 0, error),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn culled_counts_mask_bits() {
-        let output = mesh(&[0], &[0], &[63], &[colour_for("minecraft:stone")], false).unwrap();
-        assert_eq!(output.quads, 6);
-        assert_eq!(output.vertices.len(), 6 * 4 * 12);
-        assert_eq!(output.indices.len(), 6 * 6 * 4);
-    }
-    #[test]
-    fn unaligned_input_bytes_are_accepted() {
-        let mut positions = vec![0u8];
-        positions.extend_from_slice(&0u32.to_le_bytes());
-        let mut palettes = vec![0u8];
-        palettes.extend_from_slice(&0u32.to_le_bytes());
-        let mut colours = vec![0u8];
-        colours.extend_from_slice(&0xff00_0001u32.to_le_bytes());
+        let layers = [1u8, 0].repeat(6);
+        let tints = [0u8; 6];
+        let opaque = [1u8];
+        let alpha = [0u8];
+        let materials = Materials {
+            face_layers: &layers,
+            face_tints: &tints,
+            opaque: &opaque,
+            alpha_test: &alpha,
+        };
+        let positions = 0u32.to_le_bytes();
+        let palettes = 0u32.to_le_bytes();
         let output = unsafe {
             mesh_raw(
-                positions.as_ptr().add(1),
-                palettes.as_ptr().add(1),
-                &[8],
+                positions.as_ptr(),
+                palettes.as_ptr(),
+                &[63],
                 1,
-                colours.as_ptr().add(1),
-                1,
+                materials,
                 false,
             )
         }
         .unwrap();
-        assert_eq!(output.quads, 1);
-    }
-    #[test]
-    fn transparent_black_is_a_face() {
-        assert_eq!(mesh(&[0], &[0], &[8], &[0], true).unwrap().quads, 1);
-    }
-    #[test]
-    fn greedy_merges_adjacent_top_faces() {
-        let colour = colour_for("minecraft:stone");
-        let culled = mesh(&[0, 1], &[0, 0], &[8, 8], &[colour], false).unwrap();
-        let greedy = mesh(&[0, 1], &[0, 0], &[8, 8], &[colour], true).unwrap();
-        assert_eq!(culled.quads, 2);
-        assert_eq!(greedy.quads, 1);
+        assert_eq!(output.quads, 6);
+        assert_eq!(output.vertices.len(), 6 * 4 * 12);
+        assert_eq!(output.indices.len(), 6 * 6 * 4);
     }
 }

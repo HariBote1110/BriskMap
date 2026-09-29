@@ -1,6 +1,7 @@
 import { decodeRegion } from '../src/format.mjs';
 import { meshChunk as meshJs } from '../src/mesh-js.mjs';
 import { loadMesher } from '../src/wasm.mjs';
+import { resolveMaterials, syntheticMaterials } from '../src/materials.mjs';
 let chunks = [], wasm, acknowledge;
 const inflate = async data => new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
 self.onmessage = async ({ data }) => {
@@ -9,9 +10,10 @@ self.onmessage = async ({ data }) => {
     } else if (data.type === 'decode') {
       const region = await decodeRegion(data.bytes, inflate);
       const transfer = [];
+      const materials = data.materialTable ? resolveMaterials(region.palette, data.materialTable) : syntheticMaterials(region.palette);
       const items = region.chunks.map(chunk => {
         transfer.push(chunk.positions.buffer, chunk.paletteIndices.buffer, chunk.masks.buffer);
-        return { ...chunk, colours: region.colours };
+        return { ...chunk, materials };
       });
       self.postMessage({ type: 'decoded', id: data.id, chunks: items }, transfer);
     } else if (data.type === 'assign') {

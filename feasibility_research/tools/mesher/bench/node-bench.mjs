@@ -5,11 +5,12 @@ import { performance } from 'node:perf_hooks';
 import { decodeRegion } from '../src/format.mjs';
 import { meshChunk as meshJs } from '../src/mesh-js.mjs';
 import { loadMesher } from '../src/wasm.mjs';
+import { resolveMaterials, syntheticMaterials } from '../src/materials.mjs';
 
 function options(args) {
   const value = name => { const at = args.indexOf(name); return at < 0 ? undefined : args[at + 1]; };
-  const result = { data: value('--data'), regions: Number(value('--regions') ?? Infinity), impl: value('--impl') ?? 'js', mode: value('--mode') ?? 'culled', warmup: Number(value('--warmup') ?? 2), passes: Number(value('--passes') ?? 5) };
-  if (!result.data || !['js', 'wasm'].includes(result.impl) || !['culled', 'greedy'].includes(result.mode) || result.regions < 1 || !Number.isInteger(result.warmup) || result.warmup < 0 || !Number.isInteger(result.passes) || result.passes < 1) throw new Error('Use --data DIR [--regions N] [--impl js|wasm] [--mode culled|greedy] [--warmup 2] [--passes 5]');
+  const result = { blocks: value('--blocks'), data: value('--data'), regions: Number(value('--regions') ?? Infinity), impl: value('--impl') ?? 'js', mode: value('--mode') ?? 'culled', warmup: Number(value('--warmup') ?? 2), passes: Number(value('--passes') ?? 5) };
+  if (!result.data || !['js', 'wasm'].includes(result.impl) || !['culled', 'greedy'].includes(result.mode) || result.regions < 1 || !Number.isInteger(result.warmup) || result.warmup < 0 || !Number.isInteger(result.passes) || result.passes < 1) throw new Error('Use --data DIR [--regions N] [--blocks FILE] [--impl js|wasm] [--mode culled|greedy] [--warmup 2] [--passes 5]');
   return result;
 }
 const median = values => { const ordered = [...values].sort((a, b) => a - b); return ordered[Math.floor(ordered.length / 2)]; };
@@ -20,12 +21,14 @@ async function main() {
   const config = options(process.argv.slice(2));
   const files = (await readdir(config.data)).filter(name => name.endsWith('.b3d')).sort().slice(0, config.regions);
   if (!files.length) throw new Error('No .b3d region files found');
+  const materialTable = config.blocks ? JSON.parse(await readFile(config.blocks, 'utf8')) : null;
   const all = []; let shellBlocks = 0, facesIn = 0;
   const decodeStart = performance.now();
   for (const file of files) {
     const region = await decodeRegion(await readFile(join(config.data, file)), inflateRawSync);
+    const materials = materialTable ? resolveMaterials(region.palette, materialTable) : syntheticMaterials(region.palette);
     for (const chunk of region.chunks) {
-      const input = { ...chunk, colours: region.colours }; all.push(input);
+      const input = { ...chunk, materials }; all.push(input);
       shellBlocks += chunk.positions.length;
       for (const mask of chunk.masks) facesIn += popcount(mask);
     }

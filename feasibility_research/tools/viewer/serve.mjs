@@ -7,9 +7,10 @@ const args=process.argv.slice(2);
 function option(name,fallback){const index=args.indexOf(`--${name}`);if(index<0)return fallback;if(index+1>=args.length)throw new Error(`Missing --${name} value`);return args[index+1];}
 const root=await realpath(option('root',new URL('../',import.meta.url).pathname));
 const data=await realpath(option('data',process.cwd()));
+const texturesOption=option('textures',null),textures=texturesOption?await realpath(texturesOption):null;
 const port=Number(option('port','8200')),host=option('host','0.0.0.0');
 if(!Number.isInteger(port)||port<0||port>65535)throw new Error('Invalid port');
-const types={'.html':'text/html; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.wasm':'application/wasm','.b3d':'application/octet-stream'};
+const types={'.html':'text/html; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.wasm':'application/wasm','.b3d':'application/octet-stream','.png':'image/png'};
 
 createServer(async(req,res)=>{
   const headers={'Cache-Control':'no-store','Accept-Ranges':'bytes'};
@@ -20,8 +21,10 @@ createServer(async(req,res)=>{
     try{decoded=decodeURIComponent(pathname);}catch{res.writeHead(404,headers).end();return;}
     if(!decoded.startsWith('/')||decoded.includes('\0')||decoded.includes('\\')||decoded.split('/').includes('..')){res.writeHead(404,headers).end();return;}
     const isData=decoded==='/data'||decoded.startsWith('/data/');
-    const base=isData?data:root;
-    const local=isData?decoded.slice(6):decoded.slice(1);
+    const isTexture=decoded==='/textures'||decoded.startsWith('/textures/');
+    if(isTexture&&!textures){res.writeHead(404,headers).end();return;}
+    const base=isData?data:isTexture?textures:root;
+    const local=isData?decoded.slice(6):isTexture?decoded.slice(10):decoded.slice(1);
     const candidate=resolve(base,local);
     const rel=relative(base,candidate);
     if(rel==='..'||rel.startsWith(`..${sep}`)){res.writeHead(404,headers).end();return;}
