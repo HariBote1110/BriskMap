@@ -47,6 +47,8 @@ export function createHelp({ dialog, openButton, closeButton, title, current, bo
     closeButton.focus();
   });
   closeButton.addEventListener('click', () => dialog.close());
+  // Some browsers (Safari) do not focus a clicked button, so return focus explicitly.
+  dialog.addEventListener('close', () => openButton.focus({ preventScroll: true }));
   // A click on the backdrop lands on the dialog element itself.
   dialog.addEventListener('click', (event) => {
     if (event.target !== dialog) return;

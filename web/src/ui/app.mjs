@@ -385,7 +385,7 @@ function showIndexError(error) {
     : error?.code === 'format' ? t('state.indexFailed.format') : t('state.indexFailed.network');
   const reload = error?.code === 'format';
   states.show({
-    tone: 'error', icon: error?.code === 'network' ? 'offline' : 'error',
+    tone: 'error', icon: error?.code === 'network' ? 'offline' : 'error', scrim: false,
     title: t('state.indexFailed.title'),
     body,
     action: reload
@@ -396,7 +396,7 @@ function showIndexError(error) {
 
 function showEmpty() {
   states.show({
-    tone: 'info', icon: 'clock',
+    tone: 'info', icon: 'clock', scrim: false,
     title: t('state.empty.title'),
     body: t('state.empty.body'),
     action: { label: t('state.retry'), onClick: retryEmpty },
@@ -429,7 +429,7 @@ async function startViewer() {
     console.warn('[BriskMap] viewer', error);
     if (error?.code === 'webgl2') {
       states.show({
-        tone: 'warning', icon: 'display',
+        tone: 'warning', icon: 'display', scrim: false,
         title: t('state.webgl.title'),
         body: t('state.webgl.body'),
       });

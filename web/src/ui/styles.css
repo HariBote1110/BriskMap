@@ -248,7 +248,7 @@ svg { display: block; flex: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.picker-chevron { color: var(--text-muted); transition: transform 0.15s ease; }
+.picker-chevron { display: inline-flex; color: var(--text-muted); transition: transform 0.15s ease; }
 .picker-button[aria-expanded="true"] .picker-chevron { transform: rotate(180deg); }
 .picker-chevron svg { width: 18px; height: 18px; }
 
@@ -456,6 +456,7 @@ svg { display: block; flex: none; }
   animation: pop-in 0.16s ease-out;
 }
 .note-icon svg { width: 20px; height: 20px; }
+.note .icon-button { flex: none; }
 .note-text { flex: 1; min-width: 0; padding: var(--space-1) 0; }
 .note[data-kind="info"] .note-icon { color: var(--accent); }
 .note[data-kind="warning"] .note-icon { color: var(--warning); }
@@ -497,7 +498,7 @@ svg { display: block; flex: none; }
   padding: var(--space-5);
   border-radius: var(--radius-l);
   background: var(--panel-solid);
-  animation: fade-in 0.2s ease-out both;
+  animation: rise 0.2s ease-out;
 }
 .state-card[data-compact="true"] {
   width: auto;
@@ -505,7 +506,7 @@ svg { display: block; flex: none; }
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
-  animation-delay: 0.25s;
+  animation: fade-in 0.2s ease-out 0.25s both;
 }
 .state-icon {
   display: grid;
@@ -554,7 +555,7 @@ svg { display: block; flex: none; }
   overflow-y: auto;
 }
 .help-dialog::backdrop { background: var(--scrim); }
-.help-dialog[open] { animation: fade-in 0.16s ease-out; }
+.help-dialog[open] { animation: rise 0.16s ease-out; }
 .help-header {
   display: flex;
   align-items: center;
@@ -609,7 +610,15 @@ svg { display: block; flex: none; }
 }
 
 /* ---- responsive --------------------------------------------------------------- */
-@media (max-width: 640px) {
+@media (max-width: 899px) {
+  .hud-bottom {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "notes notes" "coords progress";
+  }
+}
+
+@media (max-width: 520px) {
+  :root { --gutter: 8px; }
   .hud-bottom {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "notes" "progress" "coords";
@@ -617,14 +626,9 @@ svg { display: block; flex: none; }
   .notes { align-items: stretch; }
   .note { max-width: none; }
   .progress { width: auto; justify-self: stretch; }
-}
-
-@media (max-width: 520px) {
-  :root { --gutter: 8px; }
   .toolbar { flex-direction: column; align-items: flex-end; }
   .tool-group { flex-direction: column; }
   .picker-name { max-width: 14ch; }
-  .bubble, .manual-copy { top: 0; right: calc(100% + var(--space-2)); }
   .help-dialog { padding: var(--space-2) var(--space-4) var(--space-4); }
 }
 
@@ -640,8 +644,11 @@ svg { display: block; flex: none; }
   from { transform: translateX(-100%); }
   to { transform: translateX(290%); }
 }
-@keyframes fade-in { from { opacity: 0; transform: translateY(4px); } }
-@keyframes pop-in { from { opacity: 0; transform: scale(0.96); } }
+/* Entry animations move but never hide content, so a paused timeline cannot leave it invisible.
+   Only the delayed "loading" pill fades, to avoid a flash on fast loads. */
+@keyframes rise { from { transform: translateY(4px); } }
+@keyframes pop-in { from { transform: scale(0.96); } }
+@keyframes fade-in { from { opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

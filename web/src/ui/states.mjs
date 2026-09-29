@@ -27,10 +27,12 @@ export function createStateLayer(layer) {
         el('h1', { id: 'state-title', text: title }),
         body ? el('p', { text: body }) : null,
         detail ? el('p', { class: 'state-detail', text: detail }) : null,
-        actionButton || status
+        actionButton || status !== undefined
           ? el('div', { class: 'state-actions' }, [
             actionButton,
-            status ? el('span', { class: 'state-status', id: 'state-status', text: status }) : null,
+            status !== undefined
+              ? el('span', { class: 'state-status', id: 'state-status', text: status })
+              : null,
           ])
           : null,
       ]);
