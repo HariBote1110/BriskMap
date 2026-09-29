@@ -5,6 +5,7 @@ import io.github.haribote1110.briskmap.paper.config.ConfigLoader;
 import io.github.haribote1110.briskmap.paper.extract.ExtractionService;
 import io.github.haribote1110.briskmap.paper.index.MapIndexWriter;
 import io.github.haribote1110.briskmap.paper.world.MapTarget;
+import io.github.haribote1110.briskmap.paper.world.MissingRegionWarnings;
 import io.github.haribote1110.briskmap.paper.world.RegionFolderResolver;
 import io.github.haribote1110.briskmap.paper.web.Mount;
 import io.github.haribote1110.briskmap.paper.web.WebServer;
@@ -12,6 +13,7 @@ import io.github.haribote1110.briskmap.paper.web.WebServerConfig;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -21,6 +23,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
+import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -45,8 +48,10 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
     private final java.util.concurrent.atomic.AtomicBoolean indexQueued = new java.util.concurrent.atomic.AtomicBoolean();
     private final java.util.concurrent.atomic.AtomicBoolean indexDirty = new java.util.concurrent.atomic.AtomicBoolean();
     private final Map<String, Long> saveScans = new java.util.concurrent.ConcurrentHashMap<>();
+    private final MissingRegionWarnings missingRegionWarnings = new MissingRegionWarnings();
 
     @Override public void onEnable() {
+        missingRegionWarnings.reset();
         saveDefaultConfig();
         settings = readSettings();
         Path root = getDataFolder().toPath().resolve("web");
@@ -126,7 +131,10 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
                     extraction.add(new MapTarget(id, id, key.toString(), region, out,
                             new int[]{spawn.getBlockX(), spawn.getBlockY(), spawn.getBlockZ()}));
                     extraction.scanNow(id);
-                }, () -> getLogger().warning("No region directory for world " + id));
+                }, () -> {
+                    if (missingRegionWarnings.shouldWarn(id))
+                        getLogger().warning("No region directory for world " + id);
+                });
     }
 
     private void requestIndex() {
@@ -183,12 +191,15 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
         String action = args.length == 0 ? "status" : args[0].toLowerCase(Locale.ROOT);
         switch (action) {
             case "status" -> {
-                String url = web == null ? "off" : "http://" + settings.webBind() + ":" + web.port() + "/";
+                String url = web == null ? "off" : StatusFormatter.webUrl(settings.webBind(), Bukkit.getIp(), web.port());
                 List<ExtractionService.Status> statuses = extraction.statuses();
                 if (statuses.isEmpty()) sender.sendMessage("BriskMap: no enabled maps; web=" + url);
+                long now = System.currentTimeMillis();
+                ZoneId zone = ZoneId.systemDefault();
                 for (var status : statuses) sender.sendMessage("BriskMap " + status.id() + ": " + status.done()
                         + "/" + status.total() + " regions, failed=" + status.failed() + ", running="
-                        + status.running() + ", last scan=" + status.lastScan() + ", web=" + url);
+                        + status.running() + ", last scan=" + StatusFormatter.lastScan(status.lastScan(), now, zone)
+                        + ", web=" + url);
                 return true;
             }
             case "scan" -> {
@@ -217,6 +228,7 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
     private boolean hasWorld(String id) { return extraction.targets().stream().anyMatch(target -> target.id().equals(id)); }
 
     private void reloadBriskMap() {
+        missingRegionWarnings.reset();
         BriskMapConfig old = settings;
         reloadConfig();
         settings = readSettings();
