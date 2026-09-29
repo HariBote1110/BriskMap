@@ -2,3 +2,5 @@
 .gradle/
 .gradle-home/
 build/
+web/test/fixtures-out/
+web/rust/target/
