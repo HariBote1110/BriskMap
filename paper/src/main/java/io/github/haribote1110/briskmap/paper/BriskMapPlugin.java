@@ -4,6 +4,8 @@ import io.github.haribote1110.briskmap.paper.config.BriskMapConfig;
 import io.github.haribote1110.briskmap.paper.config.ConfigLoader;
 import io.github.haribote1110.briskmap.paper.extract.ExtractionService;
 import io.github.haribote1110.briskmap.paper.index.MapIndexWriter;
+import io.github.haribote1110.briskmap.paper.textures.TextureService;
+import io.github.haribote1110.briskmap.core.textures.ClientJarProvider;
 import io.github.haribote1110.briskmap.paper.world.MapTarget;
 import io.github.haribote1110.briskmap.paper.world.MissingRegionWarnings;
 import io.github.haribote1110.briskmap.paper.world.RegionFolderResolver;
@@ -43,6 +45,8 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
     private ExtractionService extraction;
     private WebServer web;
     private MapIndexWriter index;
+    private TextureService textures;
+    private ExecutorService textureWorker;
     private ExecutorService indexWorker;
     private Path mapsRoot;
     private final java.util.concurrent.atomic.AtomicBoolean indexQueued = new java.util.concurrent.atomic.AtomicBoolean();
@@ -73,6 +77,7 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
         startWeb();
         startExtraction();
         for (World world : getServer().getWorlds()) addWorld(world);
+        startTextures(root);
         requestIndex();
         extraction.scanNow(null);
         getServer().getPluginManager().registerEvents(this, this);
@@ -137,6 +142,18 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
                 });
     }
 
+    private void startTextures(Path root) {
+        textureWorker = Executors.newSingleThreadExecutor(task -> {
+            Thread thread = new Thread(task, "BriskMap-textures");
+            thread.setDaemon(true);
+            return thread;
+        });
+        textures = new TextureService(getServer().getMinecraftVersion(), getDataFolder().toPath().resolve("cache"),
+                root.resolve("textures"), settings.acceptMojangDownload(), new ClientJarProvider()::obtain,
+                getLogger(), textureWorker, this::requestIndex);
+        textures.ensure();
+    }
+
     private void requestIndex() {
         ExecutorService worker = indexWorker;
         if (worker == null || worker.isShutdown()) return;
@@ -164,7 +181,7 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
                     target.spawn(), settings.caves(), settings.fluids(), status.dataVersionMin(),
                     status.dataVersionMax(), target.outDir(), status.updated()));
         }
-        try { index.write(entries); }
+        try { index.write(entries, textures == null ? null : textures.state().relativeUrl()); }
         catch (IOException exception) { getLogger().warning("Cannot write map index: " + exception.getMessage()); }
     }
 
@@ -200,6 +217,9 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
                         + "/" + status.total() + " regions, failed=" + status.failed() + ", running="
                         + status.running() + ", last scan=" + StatusFormatter.lastScan(status.lastScan(), now, zone)
                         + ", web=" + url);
+                TextureService.State textureState = textures.state();
+                sender.sendMessage("BriskMap textures " + textureState.version() + ": "
+                        + textureState.status() + (textureState.message() == null ? "" : " (" + textureState.message() + ")"));
                 return true;
             }
             case "scan" -> {
@@ -213,6 +233,12 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
                 getLogger().info("Rebuilding map " + args[1]);
                 extraction.rebuild(args[1]);
                 sender.sendMessage("BriskMap rebuild queued for " + args[1]);
+                return true;
+            }
+            case "textures" -> {
+                if (args.length != 1) return false;
+                textures.rebuild();
+                sender.sendMessage("BriskMap texture rebuild queued");
                 return true;
             }
             case "reload" -> {
@@ -232,6 +258,11 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
         BriskMapConfig old = settings;
         reloadConfig();
         settings = readSettings();
+        textures.setConsent(settings.acceptMojangDownload());
+        if (textures.state().status() != TextureService.Status.READY) {
+            if (textures.state().status() == TextureService.Status.FAILED) textures.rebuild();
+            else textures.ensure();
+        }
         if (old.webEnabled() != settings.webEnabled() || !old.webBind().equals(settings.webBind())
                 || old.webPort() != settings.webPort() || old.webThreads() != settings.webThreads()) {
             if (web != null) { web.stop(); web = null; }
@@ -252,7 +283,7 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
     }
 
     @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length == 1) return Arrays.stream(new String[]{"status", "scan", "rebuild", "reload"})
+        if (args.length == 1) return Arrays.stream(new String[]{"status", "scan", "rebuild", "reload", "textures"})
                 .filter(value -> value.startsWith(args[0].toLowerCase(Locale.ROOT))).toList();
         if (args.length == 2 && (args[0].equalsIgnoreCase("scan") || args[0].equalsIgnoreCase("rebuild")))
             return extraction.targets().stream().map(MapTarget::id).filter(id -> id.startsWith(args[1])).sorted().toList();
@@ -260,6 +291,7 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
     }
 
     @Override public void onDisable() {
+        if (textureWorker != null) textureWorker.shutdownNow();
         if (extraction != null) extraction.close();
         if (indexWorker != null) {
             indexWorker.shutdown();

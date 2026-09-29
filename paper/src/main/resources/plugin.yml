@@ -7,8 +7,8 @@ authors: [HariBote1110]
 website: https://github.com/HariBote1110/BriskMap
 commands:
   briskmap:
-    description: Manage BriskMap extraction and web serving.
-    usage: /briskmap <status|scan [world]|rebuild <world>|reload>
+    description: Manage BriskMap extraction, textures, and web serving.
+    usage: /briskmap <status|scan [world]|rebuild <world>|textures|reload>
     permission: briskmap.admin
 permissions:
   briskmap.admin:

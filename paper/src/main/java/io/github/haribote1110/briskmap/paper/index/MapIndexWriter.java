@@ -27,12 +27,14 @@ public final class MapIndexWriter {
         @Override public int[] spawn() { return spawn.clone(); }
     }
 
-    public synchronized boolean write(List<MapEntry> maps) throws IOException {
+    public synchronized boolean write(List<MapEntry> maps) throws IOException { return write(maps, null); }
+
+    public synchronized boolean write(List<MapEntry> maps, String textures) throws IOException {
         if (content == null && Files.exists(index)) {
             content = Files.readString(index).replaceFirst("\\\"generated\\\":\\d+", "\"generated\":0");
             knownVersions.putAll(previousVersions(content));
         }
-        String body = body(maps, knownVersions);
+        String body = body(maps, knownVersions, textures);
         if (body.equals(content)) return false;
         Files.createDirectories(index.getParent());
         Path temporary = Files.createTempFile(index.getParent(), "index-", ".tmp");
@@ -45,8 +47,9 @@ public final class MapIndexWriter {
         return true;
     }
 
-    private static String body(List<MapEntry> maps, Map<String, int[]> previous) throws IOException {
-        StringBuilder json = new StringBuilder("{\"format\":1,\"generated\":0,\"textures\":null,\"maps\":[");
+    private static String body(List<MapEntry> maps, Map<String, int[]> previous, String textures) throws IOException {
+        StringBuilder json = new StringBuilder("{\"format\":1,\"generated\":0,\"textures\":")
+                .append(textures == null ? "null" : quote(textures)).append(",\"maps\":[");
         boolean first = true;
         for (MapEntry map : maps.stream().sorted(Comparator.comparing(MapEntry::id)).toList()) {
             if (!first) json.append(',');
