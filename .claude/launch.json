@@ -28,6 +28,17 @@
         "8200"
       ],
       "port": 8200
+    },
+    {
+      "name": "ui-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "web/test/ui/serve.mjs",
+        "--mock",
+        "--port",
+        "8300"
+      ],
+      "port": 8300
     }
   ]
 }
