@@ -22,11 +22,18 @@ plugins/BriskMap/
 
 ### リージョンフォルダの解決（paper 側）
 
-`World#getWorldFolder()` を起点に、次の順で最初に存在するものを使う（[world-format-by-version.md](world-format-by-version.md)）。
+`World#getWorldFolder()` の返す場所が版で違う（2026-09-30 に実サーバーで確認）。
 
-1. `<worldFolder>/dimensions/<namespace>/<path>/region`（26.x。`<namespace>:<path>` は `World#getKey()`）
-2. `<worldFolder>/region`（1.21.x のオーバーワールド）
-3. `<worldFolder>/DIM-1/region`・`<worldFolder>/DIM1/region`（1.21.x のネザー・エンド）
+| 版 | world | world_nether | world_the_end |
+|---|---|---|---|
+| 1.21.11 | `world`（中に `region/`） | `world_nether`（中に `DIM-1/region/`） | `world_the_end`（中に `DIM1/region/`） |
+| 26.3 | `world/dimensions/minecraft/overworld` | `world/dimensions/minecraft/the_nether` | `world/dimensions/minecraft/the_end` |
+
+26.3 では**次元のフォルダそのもの**が返り、どの次元もその直下に `region/` がある。そこで次の順に候補を作り、`r.*.*.mca` を含む最初の候補を使う（どれも含まなければ、存在する最初の候補）。
+
+1. `<folder>/region`
+2. ネザーなら `<folder>/DIM-1/region`、エンドなら `<folder>/DIM1/region`
+3. `<folder>/dimensions/<namespace>/<path>/region`（`World#getKey()`。ワールドの根が返る配置への保険）
 
 ### 更新の流れ
 
