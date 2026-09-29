@@ -8,6 +8,7 @@ tasks.processResources {
     val props = mapOf("version" to project.version)
     inputs.properties(props)
     filesMatching("plugin.yml") { expand(props) }
+    from(rootProject.file("web/src")) { into("web") }
 }
 
 tasks.jar {
