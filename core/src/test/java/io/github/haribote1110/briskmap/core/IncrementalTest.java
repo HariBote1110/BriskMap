@@ -1,0 +1,198 @@
+package io.github.haribote1110.briskmap.core;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import io.github.haribote1110.briskmap.core.extract.Extracted2d;
+import io.github.haribote1110.briskmap.core.extract.Extracted3d;
+import io.github.haribote1110.briskmap.core.format.Reader;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
+
+class IncrementalTest {
+    private static final ExtractOptions OPTIONS = new ExtractOptions(false, true, 6, true, true);
+
+    @Test void changedEdgesAndChunkMembershipMatchFreshExtraction() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "changes-");
+        Path input = dir.resolve("r.0.0.mca"), updated = dir.resolve("updated"), fresh = dir.resolve("fresh");
+        byte[][] chunks = new byte[1024][];
+        int[] stamps = new int[1024];
+        chunks[33] = chunk("minecraft:full", "minecraft:stone", false); stamps[33] = 1;
+        chunks[34] = chunk("minecraft:full", "minecraft:stone", false); stamps[34] = 1;
+        chunks[35] = chunk("minecraft:carved", "minecraft:stone", false); stamps[35] = 1;
+        chunks[37] = chunk("minecraft:full", "minecraft:stone", false); stamps[37] = 1;
+        writeRegion(input, chunks, stamps);
+        RegionExtractor.extract(input, updated, OPTIONS);
+        Reader first = new Reader(updated.resolve("r.0.0.b3d"));
+        assertTrue(Arrays.binarySearch(first.read3d(33).positions[4], 8 * 256 + 8 * 16 + 15) < 0);
+        chunks[34] = chunk("minecraft:full", "minecraft:stone", true); stamps[34] = 2;
+        chunks[35] = chunk("minecraft:full", "minecraft:diamond_block", false); stamps[35] = 2;
+        chunks[36] = chunk("minecraft:full", "minecraft:stone", false); stamps[36] = 2;
+        chunks[37] = null; stamps[37] = 0;
+        writeRegion(input, chunks, stamps);
+        assertTrue(RegionExtractor.update(input, updated, OPTIONS).written());
+        RegionExtractor.extract(input, fresh, OPTIONS);
+        Reader changed2 = new Reader(updated.resolve("r.0.0.b2d"));
+        Reader changed3 = new Reader(updated.resolve("r.0.0.b3d"));
+        Reader fresh2 = new Reader(fresh.resolve("r.0.0.b2d"));
+        Reader fresh3 = new Reader(fresh.resolve("r.0.0.b3d"));
+        assertTrue(changed3.blocks.contains("minecraft:diamond_block"));
+        for (int i = 0; i < 1024; i++) {
+            compare2d(changed2, fresh2, i);
+            compare3d(changed3, fresh3, i);
+        }
+        int position = 8 * 256 + 8 * 16 + 15;
+        Extracted3d left = changed3.read3d(33);
+        assertTrue((left.masks[4][Arrays.binarySearch(left.positions[4], position)] & 2) != 0);
+        assertNull(changed2.read2d(37));
+    }
+
+    @Test void flagsAndDamagedOutputForceFullExtraction() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "fallback-");
+        Path input = dir.resolve("r.0.0.mca"), out = dir.resolve("out");
+        byte[][] chunks = new byte[1024][]; int[] stamps = new int[1024];
+        chunks[0] = chunk("minecraft:full", "minecraft:stone", false); stamps[0] = 42;
+        writeRegion(input, chunks, stamps);
+        RegionExtractor.extract(input, out, OPTIONS);
+        ExtractOptions changed = new ExtractOptions(false, false, 6, true, true);
+        assertTrue(RegionExtractor.update(input, out, changed).written());
+        assertEquals(0, new Reader(out.resolve("r.0.0.b3d")).flags);
+        Path file = out.resolve("r.0.0.b2d");
+        byte[] damaged = Files.readAllBytes(file); damaged[4] = 2; Files.write(file, damaged);
+        assertTrue(RegionExtractor.update(input, out, changed).written());
+        assertEquals(3, new Reader(file).version);
+        damaged = Files.readAllBytes(file); damaged[damaged.length - 1] = 0; Files.write(file, damaged);
+        assertTrue(RegionExtractor.update(input, out, changed).written());
+        assertEquals(1, new Reader(file).chunkCount());
+    }
+
+    @Test void worldDeletionCancellationAndProgress() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "world-");
+        Path input = dir.resolve("in"), out = dir.resolve("out");
+        Files.createDirectories(input);
+        byte[][] chunks = new byte[1024][]; int[] stamps = new int[1024];
+        chunks[0] = chunk("minecraft:full", "minecraft:stone", false); stamps[0] = 1;
+        writeRegion(input.resolve("r.0.0.mca"), chunks, stamps);
+        writeRegion(input.resolve("r.1.0.mca"), chunks, stamps);
+        List<Integer> progress = new ArrayList<>();
+        AtomicBoolean stop = new AtomicBoolean();
+        var partial = WorldExtractor.extract(input, out, OPTIONS, 1, (done, total) -> {
+            progress.add(done); stop.set(true); assertEquals(2, total);
+        }, stop::get);
+        assertEquals(1, partial.regions()); assertEquals(List.of(1), progress);
+        assertEquals(0, Files.list(out).filter(path -> path.toString().endsWith(".tmp")).count());
+        stop.set(false);
+        var complete = WorldExtractor.extract(input, out, OPTIONS, 2, null, stop::get);
+        assertEquals(2, complete.regions());
+        Files.delete(input.resolve("r.1.0.mca"));
+        var reduced = WorldExtractor.update(input, out, OPTIONS, 1, null, stop::get);
+        assertEquals(1, reduced.regionsDeleted());
+        assertFalse(Files.exists(out.resolve("r.1.0.b2d")));
+    }
+
+    @Test void cliPrintsDocumentedSummary() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "cli-");
+        Path input = Path.of("feasibility_research/fixtures");
+        Assumptions.assumeTrue(Files.isRegularFile(input.resolve("r.0.0.mca"))
+                && Files.isRegularFile(input.resolve("r.-1.-1.mca")), "1.21.11 fixtures are absent");
+        PrintStream original = System.out;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        try {
+            System.setOut(new PrintStream(captured, true, StandardCharsets.UTF_8));
+            io.github.haribote1110.briskmap.core.cli.Main.main(new String[]{"--in", input.toString(), "--out", dir.resolve("out").toString(), "--threads", "1"});
+        } finally { System.setOut(original); }
+        String json = captured.toString(StandardCharsets.UTF_8).trim();
+        assertTrue(json.startsWith("{\"caves\":\"hide\""));
+        for (String field : List.of("chunks_extracted", "chunks_reused", "regions_written", "regions_unchanged",
+                "regions_deleted", "data_version_min", "data_version_max")) assertTrue(json.contains("\"" + field + "\":"), field);
+        assertTrue(json.contains("\"chunks_extracted\":2048"));
+    }
+
+    private static void compare2d(Reader actual, Reader expected, int index) throws IOException {
+        Extracted2d a = actual.read2d(index), b = expected.read2d(index);
+        if (a == null || b == null) { assertNull(a); assertNull(b); return; }
+        for (int i = 0; i < 256; i++) {
+            assertEquals(b.y[i], a.y[i]); assertEquals(b.depth[i], a.depth[i]);
+            assertEquals(expected.blocks.get(b.block[i]), actual.blocks.get(a.block[i]));
+            assertEquals(expected.biomes.get(b.biome[i]), actual.biomes.get(a.biome[i]));
+        }
+    }
+
+    private static void compare3d(Reader actual, Reader expected, int index) throws IOException {
+        Extracted3d a = actual.read3d(index), b = expected.read3d(index);
+        if (a == null || b == null) { assertNull(a); assertNull(b); return; }
+        for (int section = 0; section < 24; section++) {
+            assertArrayEquals(b.positions[section], a.positions[section]);
+            assertArrayEquals(b.masks[section], a.masks[section]);
+            for (int i = 0; i < a.blocks[section].length; i++)
+                assertEquals(expected.blocks.get(b.blocks[section][i]), actual.blocks.get(a.blocks[section][i]));
+        }
+    }
+
+    private static void writeRegion(Path path, byte[][] chunks, int[] stamps) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        byte[] header = new byte[8192];
+        int sector = 2;
+        for (int i = 0; i < 1024; i++) if (chunks[i] != null) {
+            int sectors = (chunks[i].length + 5 + 4095) / 4096;
+            header[i * 4] = (byte) (sector >>> 16); header[i * 4 + 1] = (byte) (sector >>> 8);
+            header[i * 4 + 2] = (byte) sector; header[i * 4 + 3] = (byte) sectors;
+            sector += sectors;
+        }
+        for (int i = 0; i < 1024; i++) {
+            int at = 4096 + i * 4; header[at] = (byte) (stamps[i] >>> 24);
+            header[at + 1] = (byte) (stamps[i] >>> 16); header[at + 2] = (byte) (stamps[i] >>> 8);
+            header[at + 3] = (byte) stamps[i];
+        }
+        bytes.write(header);
+        for (byte[] chunk : chunks) if (chunk != null) {
+            DataOutputStream out = new DataOutputStream(bytes);
+            out.writeInt(chunk.length + 1); out.writeByte(3); out.write(chunk);
+            int padding = (4096 - (chunk.length + 5) % 4096) % 4096;
+            bytes.write(new byte[padding]);
+        }
+        Files.write(path, bytes.toByteArray());
+    }
+
+    private static byte[] chunk(String status, String state, boolean edgeAir) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream out = new DataOutputStream(bytes);
+        out.writeByte(10); out.writeUTF("");
+        out.writeByte(3); out.writeUTF("DataVersion"); out.writeInt(5023);
+        out.writeByte(8); out.writeUTF("Status"); out.writeUTF(status);
+        out.writeByte(10); out.writeUTF("Heightmaps");
+        long[] heights = new long[37];
+        for (int col = 0; col < 256; col++) heights[col / 7] |= 80L << (col % 7 * 9);
+        for (String name : List.of("WORLD_SURFACE", "OCEAN_FLOOR")) {
+            out.writeByte(12); out.writeUTF(name); out.writeInt(heights.length);
+            for (long value : heights) out.writeLong(value);
+        }
+        out.writeByte(0);
+        out.writeByte(9); out.writeUTF("sections"); out.writeByte(10); out.writeInt(1);
+        out.writeByte(1); out.writeUTF("Y"); out.writeByte(0);
+        out.writeByte(10); out.writeUTF("block_states");
+        out.writeByte(9); out.writeUTF("palette"); out.writeByte(8); out.writeInt(edgeAir ? 2 : 1);
+        out.writeUTF(state); if (edgeAir) out.writeUTF("minecraft:air");
+        if (edgeAir) {
+            out.writeByte(12); out.writeUTF("data"); out.writeInt(256);
+            int affected = 8 * 256 + 8 * 16;
+            for (int i = 0; i < 256; i++) out.writeLong(i == affected / 16 ? 1L << (affected % 16 * 4) : 0);
+        }
+        out.writeByte(0);
+        out.writeByte(10); out.writeUTF("biomes");
+        out.writeByte(9); out.writeUTF("palette"); out.writeByte(8); out.writeInt(1);
+        out.writeUTF("minecraft:plains"); out.writeByte(0); out.writeByte(0);
+        out.writeByte(0); out.writeByte(0);
+        return bytes.toByteArray();
+    }
+}
