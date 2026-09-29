@@ -1,3 +1,38 @@
+/**
+ * BriskMap browser engine: public module.
+ *
+ * createViewer(canvas, options) -> Promise<viewer>
+ *   options: { index, mapId, mode?: '3d'|'2d', view?, baseUrl?, onStatus?, onViewChange?, onError? }
+ *   Rejects (and calls onError first) when the viewer cannot be built. Such errors carry
+ *   fatal: true and code 'webgl2', 'unknown-map', 'invalid-view' or 'render' (any other set-up
+ *   failure).
+ *
+ * Errors (onError)
+ *   Every Error passed to onError carries `fatal` (boolean) and `code` (string).
+ *   fatal is true exactly when the error moved status.phase to 'error'; the viewer then stops
+ *   drawing and the caller should replace it. fatal false means the view keeps working.
+ *   Codes: 'render' (fatal: drawing failed), 'region' (a region or its chunks failed after
+ *   retries; that area stays empty), 'index-poll' (a background index poll failed; the last good
+ *   index is kept and the next poll retries), 'texture' (the atlas failed; flat colours are used),
+ *   'invalid-view' (a bad value from the benchmark camera hook). The original error, with its
+ *   loader code ('network', 'http', 'format'), is kept as `cause` where one exists.
+ *
+ * setView(partial)   Merges into the current view. Throws code 'unknown-map' or 'invalid-view'.
+ * setMode(mode)      Keeps the map and position; resolves after the first frame in the new mode.
+ * setMap(mapId)      Keeps the current mode and resets the view to the new map's spawn
+ *                    (x, y, z from spawn; yaw 0; pitch 45; distance 120; zoom 1). A caller that
+ *                    wants another view calls setView afterwards. Rejects with code 'unknown-map'
+ *                    (fatal false, not sent to onError) for an id not in the current index and
+ *                    leaves the current map and view untouched. Resolves after the first frame.
+ *
+ * Benchmark hooks (window)
+ *   __briskStats  A fresh object is installed for every load: at creation, and whenever the map
+ *                 or mode changes (setMode, setMap, setView, or an index change). Its `mode` is
+ *                 the mode being loaded; counters start at zero.
+ *   __briskReady  Set to false synchronously when such a load starts (and while panning loads
+ *                 more), and true once every selected chunk / visible region of that load is in.
+ *   __briskError  Holds only fatal errors (the stack as a string); null otherwise.
+ */
 import { loadIndex as fetchIndex, loadRegion } from './loader.mjs';
 import { selectChunks, visibleRegions } from './stream.mjs';
 import { normaliseView } from './view.mjs';
@@ -13,6 +48,21 @@ export const loadIndex = fetchIndex;
 const regionKey = (rx,rz) => `${rx},${rz}`;
 const chunkKey = (cx,cz) => `${cx},${cz}`;
 const pause = ms => new Promise(resolve => setTimeout(resolve,ms));
+
+function codedError(code,cause,fatal=false){
+  const message=cause===undefined?code:String(cause?.message??cause);
+  return Object.assign(new Error(message,cause===undefined?undefined:{cause}),{code,fatal});
+}
+
+function freshStats(mode){
+  return {chunks_selected:0,chunks_loaded:0,regions:0,requests:0,bytes_fetched:0,quads:0,vertex_bytes:0,index_bytes:0,texture_upload_bytes:0,t_textures_done_ms:null,t_blocks_json_done_ms:null,t_atlas_decoded_ms:null,texture_upload_ms:null,t_first_byte_ms:null,t_fetch_done_ms:null,t_mesh_done_ms:null,t_upload_done_ms:null,mode};
+}
+
+function checkedView(spawn,mapId,mode,partial){
+  if(!['3d','2d'].includes(mode))throw codedError('invalid-view',new Error('Unknown view mode'));
+  try{return normaliseView(spawn,mapId,mode,partial);}
+  catch(error){throw codedError('invalid-view',error);}
+}
 
 function textureUrl(baseUrl,path,name) {
   const base=new URL(baseUrl,globalThis.location?.href??'http://localhost/');
@@ -64,9 +114,8 @@ class ViewerEngine {
     this.index=options.index;
     this.baseUrl=options.baseUrl??'./';
     this.map=this.index.maps?.find(item=>item.id===options.mapId);
-    if(!this.map)throw new Error(`Unknown map: ${options.mapId}`);
-    this.view=normaliseView(this.map.spawn,this.map.id,options.mode??'3d',options.view);
-    if(!['3d','2d'].includes(this.view.mode))throw new Error('Unknown view mode');
+    if(!this.map)throw codedError('unknown-map',new Error(`Unknown map: ${options.mapId}`));
+    this.view=checkedView(this.map.spawn,this.map.id,options.mode??'3d',options.view);
     this.statusData={phase:'loading',mode:this.view.mode,textures:false,regionsLoaded:0,regionsTotal:0,chunksReady:0,chunksTotal:0,fps:0};
     this.renderer3d=new Renderer3D(gl);
     this.renderer2d=new Renderer2D(gl);
@@ -90,7 +139,7 @@ class ViewerEngine {
     this.firstFrameResolvers=[];
     this.fetchActive=0;
     this.fetchWaiters=[];
-    this.stats={chunks_selected:0,chunks_loaded:0,regions:0,requests:0,bytes_fetched:0,quads:0,vertex_bytes:0,index_bytes:0,texture_upload_bytes:0,t_textures_done_ms:null,t_blocks_json_done_ms:null,t_atlas_decoded_ms:null,texture_upload_ms:null,t_first_byte_ms:null,t_fetch_done_ms:null,t_mesh_done_ms:null,t_upload_done_ms:null,mode:this.view.mode};
+    this.stats=freshStats(this.view.mode);
     if(typeof window!=='undefined'){
       window.__briskStats=this.stats;
       window.__briskReady=false;
@@ -101,7 +150,7 @@ class ViewerEngine {
         if(Object.hasOwn(changes,'rotation'))partial.yaw=Number(changes.rotation)*180/Math.PI;
         for(const key of ['x','y','z','distance'])if(Object.hasOwn(changes,key))partial[key]=Number(changes[key]);
         if(Object.hasOwn(changes,'angle'))partial.pitch=90-Number(changes.angle)*180/Math.PI;
-        try{this.setView(partial);}catch(error){this.report(error);}
+        try{this.setView(partial);}catch(error){this.report(error,{code:'invalid-view'});}
       };
     }
     this.detachInput=attachInput(canvas,()=>this.getView(),view=>this.setView(view));
@@ -136,12 +185,17 @@ class ViewerEngine {
     clearTimeout(this.settleTimer);
     this.settleTimer=setTimeout(()=>{this.settleTimer=null;this.emitView();},200);
   }
-  report(error,fatal=false){
+  // Reports an error through onError with `code` and `fatal` set. Region and index-poll failures
+  // are wrapped so the loader's own code survives as `cause.code`.
+  report(error,{code,fatal=false}){
     if(this.disposed)return;
-    if(typeof window!=='undefined')window.__briskError=String(error?.stack??error);
-    if(fatal){this.statusData.phase='error';this.statusData.message=String(error?.message??error);}
-    else this.statusData.message=String(error?.message??error);
-    this.safeCall(this.options.onError,error);
+    const tagged=error instanceof Error&&error.code===code?Object.assign(error,{fatal}):codedError(code,error,fatal);
+    this.statusData.message=tagged.message;
+    if(fatal){
+      this.statusData.phase='error';
+      if(typeof window!=='undefined')window.__briskError=String(error?.stack??error);
+    }
+    this.safeCall(this.options.onError,tagged);
     this.notifyStatus();
   }
   beginTextures(){
@@ -173,7 +227,7 @@ class ViewerEngine {
       this.renderer3d.textured=false;
       this.stats.t_textures_done_ms=performance.now();
       this.statusData.textures=false;
-      this.report(error);
+      this.report(error,{code:'texture'});
       return null;
     }
   }
@@ -198,7 +252,7 @@ class ViewerEngine {
     try{
       if(this.view.mode==='3d')this.renderer3d.draw(this.view,width,height);
       else this.renderer2d.draw(this.view,width,height,this.visibleRegionKeys);
-    }catch(error){this.report(error,true);return;}
+    }catch(error){this.report(error,{code:'render',fatal:true});return;}
     if(typeof window!=='undefined'&&window.__recordFrames)window.__frames.push(time);
     const interval=this.lastFrameTime?time-this.lastFrameTime:0;
     if(interval>0&&interval<250){
@@ -216,11 +270,9 @@ class ViewerEngine {
   setView(partial){
     if(this.disposed)return;
     const mapId=partial.mapId??this.view.mapId,mode=partial.mode??this.view.mode;
-    if(!['3d','2d'].includes(mode))throw new Error('Unknown view mode');
-    const map=this.index.maps.find(item=>item.id===mapId);
-    if(!map)throw new Error(`Unknown map: ${mapId}`);
+    const map=this.findMap(mapId);
     const old=this.view;
-    this.view=normaliseView(map.spawn,mapId,mode,{...old,...partial});
+    this.view=checkedView(map.spawn,mapId,mode,{...old,...partial});
     if(mapId!==old.mapId||mode!==old.mode){this.map=map;this.resetSource();}
     else if(this.view.x!==old.x||this.view.z!==old.z||(mode==='2d'&&this.view.zoom!==old.zoom))this.refresh();
     this.notifyView();
@@ -229,10 +281,14 @@ class ViewerEngine {
   async setMode(mode){if(this.disposed)return;this.setView({mode});await this.firstFrame();}
   async setMap(mapId){
     if(this.disposed)return;
-    const map=this.index.maps.find(item=>item.id===mapId);
-    if(!map)throw new Error(`Unknown map: ${mapId}`);
+    const map=this.findMap(mapId);
     this.setView(normaliseView(map.spawn,mapId,this.view.mode));
     await this.firstFrame();
+  }
+  findMap(mapId){
+    const map=this.index.maps.find(item=>item.id===mapId);
+    if(!map)throw codedError('unknown-map',new Error(`Unknown map: ${mapId}`));
+    return map;
   }
   resetSource(){
     this.epoch++;
@@ -246,10 +302,8 @@ class ViewerEngine {
     this.statusData.mode=this.view.mode;
     this.statusData.phase='loading';
     this.statusData.message=undefined;
-    this.stats.mode=this.view.mode;
-    this.stats.chunks_selected=0;this.stats.chunks_loaded=0;this.stats.regions=0;
-    this.stats.quads=0;this.stats.vertex_bytes=0;this.stats.index_bytes=0;
-    if(typeof window!=='undefined')window.__briskReady=false;
+    this.stats=freshStats(this.view.mode);
+    if(typeof window!=='undefined'){window.__briskStats=this.stats;window.__briskReady=false;}
     this.refresh();
   }
   async withFetchSlot(action){
@@ -293,7 +347,7 @@ class ViewerEngine {
       const needed=chunks.filter(item=>{const key=chunkKey(item.cx,item.cz);return !this.loadedChunks.has(key)&&!this.skippedChunks.has(key)&&!pending.has(key);});
       if(!needed.length)continue;
       for(const item of needed)pending.add(chunkKey(item.cx,item.cz));
-      this.load3dGroup(region,needed,epoch,pending).catch(error=>this.report(error));
+      this.load3dGroup(region,needed,epoch,pending).catch(error=>this.report(error,{code:'region'}));
     }
     this.drawSoon();
   }
@@ -340,7 +394,7 @@ class ViewerEngine {
           this.stats.t_upload_done_ms=performance.now();
           this.update3dProgress();
           this.drawSoon();
-        }).catch(error=>{pending.delete(key);if(error.code==='cancelled'){if(epoch===this.epoch&&this.selectedChunkKeys.has(key))this.refresh3d();return;}if(epoch===this.epoch&&this.selectedChunkKeys.has(key)){this.skippedChunks.add(key);this.report(error);this.update3dProgress();this.drawSoon();}});
+        }).catch(error=>{pending.delete(key);if(error.code==='cancelled'){if(epoch===this.epoch&&this.selectedChunkKeys.has(key))this.refresh3d();return;}if(epoch===this.epoch&&this.selectedChunkKeys.has(key)){this.skippedChunks.add(key);this.report(error,{code:'region'});this.update3dProgress();this.drawSoon();}});
         tasks.push(promise);
       }
       this.stats.t_fetch_done_ms=performance.now();
@@ -348,7 +402,7 @@ class ViewerEngine {
       await Promise.all(tasks);
     }catch(error){
       for(const chunk of chunks){const key=chunkKey(chunk.cx,chunk.cz);pending.delete(key);if(epoch===this.epoch)this.skippedChunks.add(key);}
-      if(epoch===this.epoch){this.report(error);this.update3dProgress();this.drawSoon();}
+      if(epoch===this.epoch){this.report(error,{code:'region'});this.update3dProgress();this.drawSoon();}
     }
   }
   refresh2d(){
@@ -360,7 +414,7 @@ class ViewerEngine {
     this.statusData.chunksReady=0;this.statusData.chunksTotal=0;
     this.update2dProgress();
     const epoch=this.epoch,pending=this.pending2d;
-    for(const [rx,rz] of regions){const key=regionKey(rx,rz);if(this.renderer2d.regions.has(key)||pending.has(key)||this.failed2d.has(key))continue;pending.add(key);this.load2dRegion(rx,rz,epoch,pending).catch(error=>this.report(error));}
+    for(const [rx,rz] of regions){const key=regionKey(rx,rz);if(this.renderer2d.regions.has(key)||pending.has(key)||this.failed2d.has(key))continue;pending.add(key);this.load2dRegion(rx,rz,epoch,pending).catch(error=>this.report(error,{code:'region'}));}
     this.trim2d();
     this.drawSoon();
   }
@@ -409,7 +463,7 @@ class ViewerEngine {
       this.trim2d();
       this.update2dProgress();
       this.drawSoon();
-    }catch(error){if(error.code==='cancelled'){if(epoch===this.epoch&&this.visibleRegionKeys.includes(key))queueMicrotask(()=>this.refresh2d());}else if(epoch===this.epoch&&this.visibleRegionKeys.includes(key)){this.failed2d.add(key);this.report(error);this.update2dProgress();this.drawSoon();}}
+    }catch(error){if(error.code==='cancelled'){if(epoch===this.epoch&&this.visibleRegionKeys.includes(key))queueMicrotask(()=>this.refresh2d());}else if(epoch===this.epoch&&this.visibleRegionKeys.includes(key)){this.failed2d.add(key);this.report(error,{code:'region'});this.update2dProgress();this.drawSoon();}}
     finally{pending.delete(key);}
   }
   checkReady(){
@@ -439,7 +493,7 @@ class ViewerEngine {
       this.index=next;this.map=map;
       if(textureChanged){this.statusData.textures=false;this.renderer3d.textured=false;this.beginTextures();}
       if(changed||textureChanged)this.resetSource();
-    }catch(error){this.report(error);}
+    }catch(error){this.report(error,{code:'index-poll'});}
     finally{this.polling=false;}
   }
   dispose(){
@@ -463,7 +517,11 @@ class ViewerEngine {
 
 export async function createViewer(canvas,options){
   const gl=canvas.getContext('webgl2',{alpha:false,antialias:true});
-  if(!gl)throw Object.assign(new Error('WebGL2 is unavailable'),{code:'webgl2'});
+  if(!gl)throw Object.assign(new Error('WebGL2 is unavailable'),{code:'webgl2',fatal:true});
   try{return new ViewerEngine(canvas,gl,options);}
-  catch(error){options.onError?.(error);throw error;}
+  catch(error){
+    const tagged=Object.assign(error?.code?error:codedError('render',error),{fatal:true});
+    options.onError?.(tagged);
+    throw tagged;
+  }
 }
