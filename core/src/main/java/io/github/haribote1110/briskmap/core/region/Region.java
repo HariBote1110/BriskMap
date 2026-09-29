@@ -1,4 +1,5 @@
 package io.github.haribote1110.briskmap.core.region;
+import io.github.haribote1110.briskmap.core.BlockDefaults;
 import io.github.haribote1110.briskmap.core.extract.Chunk;
 import io.github.haribote1110.briskmap.core.extract.Clock;
 import io.github.haribote1110.briskmap.core.nbt.NbtReader;
@@ -49,6 +50,10 @@ public final class Region {
     }
 
     public Chunk read(int index, Inflater inflater) throws IOException {
+        return read(index, inflater, BlockDefaults.empty());
+    }
+
+    public Chunk read(int index, Inflater inflater, BlockDefaults defaults) throws IOException {
         int offset = index * 4;
         int sector = (bytes[offset] & 255) << 16 | (bytes[offset + 1] & 255) << 8 | (bytes[offset + 2] & 255);
         int sectors = bytes[offset + 3] & 255;
@@ -113,7 +118,7 @@ public final class Region {
         } else throw new UnsupportedChunkException(type);
         inflateNs = Clock.now() - tick;
         tick = Clock.now();
-        Chunk chunk = NbtReader.read(inflated, inflatedLength);
+        Chunk chunk = NbtReader.read(inflated, inflatedLength, defaults);
         parseNs = Clock.now() - tick;
         return chunk;
     }

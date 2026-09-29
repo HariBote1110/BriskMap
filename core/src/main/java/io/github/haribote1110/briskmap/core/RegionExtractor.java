@@ -79,7 +79,7 @@ public final class RegionExtractor {
             borders = new BorderCache();
             Palette borderPalette = new Palette();
             for (int i = 0; i < 1024; i++) {
-                try { borders.put(i, region.read(i, inflater), borderPalette, options.hideCaves()); }
+                try { borders.put(i, region.read(i, inflater, options.blockDefaults()), borderPalette, options.hideCaves()); }
                 catch (Region.UnsupportedChunkException ignored) { /* Counted during extraction. */ }
             }
             borderNs = Clock.now() - tick;
@@ -93,7 +93,7 @@ public final class RegionExtractor {
         for (int i = 0; i < 1024; i++) {
             if (!changedTwo[i] && !affectedThree[i]) { if (region.present(i)) reused++; continue; }
             Chunk chunk;
-            try { chunk = region.read(i, inflater); }
+            try { chunk = region.read(i, inflater, options.blockDefaults()); }
             catch (Region.UnsupportedChunkException ex) {
                 total++; unsupported++;
                 if (changedTwo[i]) two[i] = null;

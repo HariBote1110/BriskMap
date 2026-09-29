@@ -1,5 +1,6 @@
 package io.github.haribote1110.briskmap.core.cli;
 
+import io.github.haribote1110.briskmap.core.BlockDefaults;
 import io.github.haribote1110.briskmap.core.ExtractOptions;
 import io.github.haribote1110.briskmap.core.WorldExtractor;
 import io.github.haribote1110.briskmap.core.textures.TextureBuilder;
@@ -28,7 +29,7 @@ public final class Main {
                     + ",\"ms\":" + summary.ms() + "}");
             return;
         }
-        Path input = null, output = null;
+        Path input = null, output = null, defaultsPath = null;
         String caves = "hide", fluids = "surface", mode = "both";
         int threads = Runtime.getRuntime().availableProcessors(), level = 6;
         boolean update = false;
@@ -45,15 +46,16 @@ public final class Main {
                 case "--mode" -> mode = value;
                 case "--threads" -> threads = Integer.parseInt(value);
                 case "--level" -> level = Integer.parseInt(value);
+                case "--block-defaults" -> defaultsPath = Path.of(value);
                 default -> throw new IllegalArgumentException("Unknown option " + option);
             }
         }
         if (input == null || output == null || !(caves.equals("hide") || caves.equals("keep"))
                 || !(fluids.equals("surface") || fluids.equals("volume"))
                 || !(mode.equals("both") || mode.equals("2d") || mode.equals("3d")) || threads < 1)
-            throw new IllegalArgumentException("Usage: --in DIR --out DIR [--caves keep|hide] [--fluids volume|surface] [--threads N] [--level 0-9] [--mode 2d|3d|both] [--update]");
+            throw new IllegalArgumentException("Usage: --in DIR --out DIR [--caves keep|hide] [--fluids volume|surface] [--threads N] [--level 0-9] [--mode 2d|3d|both] [--block-defaults FILE.json] [--update]");
         ExtractOptions options = new ExtractOptions(caves.equals("hide"), fluids.equals("surface"), level,
-                !mode.equals("3d"), !mode.equals("2d"));
+                !mode.equals("3d"), !mode.equals("2d"), defaultsPath == null ? BlockDefaults.empty() : BlockDefaults.readJson(defaultsPath));
         long start = System.nanoTime();
         WorldExtractor.Summary summary = update
                 ? WorldExtractor.update(input, output, options, threads, null, () -> false)

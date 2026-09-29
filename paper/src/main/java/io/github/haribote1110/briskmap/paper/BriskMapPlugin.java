@@ -1,5 +1,7 @@
 package io.github.haribote1110.briskmap.paper;
 
+import io.github.haribote1110.briskmap.core.BlockDefaults;
+import io.github.haribote1110.briskmap.core.ExtractOptions;
 import io.github.haribote1110.briskmap.paper.config.BriskMapConfig;
 import io.github.haribote1110.briskmap.paper.config.ConfigLoader;
 import io.github.haribote1110.briskmap.paper.extract.ExtractionService;
@@ -18,6 +20,7 @@ import java.nio.file.Path;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -26,6 +29,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -42,6 +46,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public final class BriskMapPlugin extends JavaPlugin implements Listener, CommandExecutor, TabCompleter {
     private BriskMapConfig settings;
+    private BlockDefaults blockDefaults = BlockDefaults.empty();
     private ExtractionService extraction;
     private WebServer web;
     private MapIndexWriter index;
@@ -58,6 +63,7 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
         missingRegionWarnings.reset();
         saveDefaultConfig();
         settings = readSettings();
+        blockDefaults = serverBlockDefaults();
         Path root = getDataFolder().toPath().resolve("web");
         mapsRoot = root.resolve("maps");
         try {
@@ -91,6 +97,22 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
         return ConfigLoader.load(file::get, getLogger()::warning);
     }
 
+    private BlockDefaults serverBlockDefaults() {
+        Map<String, String> states = new HashMap<>();
+        int failed = 0;
+        for (Material material : Material.values()) {
+            if (material.isLegacy() || !material.isBlock()) continue;
+            try {
+                String name = material.getKey().toString();
+                states.put(name, BlockDefaults.canonical(name, material.createBlockData().getAsString()));
+            } catch (RuntimeException exception) {
+                failed++;
+            }
+        }
+        getLogger().info("Block defaults: " + states.size() + " loaded, " + failed + " failed");
+        return BlockDefaults.of(states);
+    }
+
     private void startWeb() {
         if (!settings.webEnabled()) return;
         Path root = getDataFolder().toPath().resolve("web");
@@ -111,8 +133,11 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
     }
 
     private void startExtraction() {
+        ExtractOptions configured = settings.options();
+        ExtractOptions options = new ExtractOptions(configured.hideCaves(), configured.surfaceFluids(),
+                configured.compressionLevel(), configured.do2d(), configured.do3d(), blockDefaults);
         extraction = new ExtractionService(settings.extractThreads(), settings.scanIntervalSeconds(),
-                settings.options(), getLogger(), this::requestIndex);
+                options, getLogger(), this::requestIndex);
     }
 
     private void addWorld(World world) {

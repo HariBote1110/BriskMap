@@ -1,4 +1,5 @@
 package io.github.haribote1110.briskmap.core.nbt;
+import io.github.haribote1110.briskmap.core.BlockDefaults;
 import io.github.haribote1110.briskmap.core.extract.Bits;
 import io.github.haribote1110.briskmap.core.extract.Chunk;
 import io.github.haribote1110.briskmap.core.extract.Section;
@@ -13,14 +14,25 @@ import java.util.Collections;
 public final class NbtReader {
     private final byte[] bytes;
     private final int limit;
+    private final BlockDefaults defaults;
     private int position;
 
-    private NbtReader(byte[] bytes, int limit) { this.bytes = bytes; this.limit = limit; }
+    private NbtReader(byte[] bytes, int limit, BlockDefaults defaults) {
+        this.bytes = bytes; this.limit = limit; this.defaults = defaults;
+    }
 
     public static Chunk read(byte[] bytes) throws IOException { return read(bytes, bytes.length); }
 
     public static Chunk read(byte[] bytes, int length) throws IOException {
-        NbtReader reader = new NbtReader(bytes, length);
+        return read(bytes, length, BlockDefaults.empty());
+    }
+
+    public static Chunk read(byte[] bytes, BlockDefaults defaults) throws IOException {
+        return read(bytes, bytes.length, defaults);
+    }
+
+    public static Chunk read(byte[] bytes, int length, BlockDefaults defaults) throws IOException {
+        NbtReader reader = new NbtReader(bytes, length, defaults);
         if (reader.u8() != 10) throw new IOException("NBT root is not a compound");
         reader.string();
         Chunk chunk = new Chunk();
@@ -105,7 +117,10 @@ public final class NbtReader {
                 if (count < 0 || count > 65536) throw new IOException("Invalid palette size");
                 palette = new String[count];
                 if (blocks && element == 10) for (int i = 0; i < count; i++) palette[i] = blockState();
-                else if (blocks && element == 8) for (int i = 0; i < count; i++) palette[i] = string();
+                else if (blocks && element == 8) for (int i = 0; i < count; i++) {
+                    String state = string();
+                    palette[i] = state.indexOf('[') < 0 ? defaults.state(state) : state;
+                }
                 else if (!blocks && element == 8) for (int i = 0; i < count; i++) palette[i] = string();
                 else throw new IOException("Unexpected palette type");
             } else if (name.equals("data") && tag == 12) data = longs();
@@ -115,13 +130,19 @@ public final class NbtReader {
 
     private String blockState() throws IOException {
         String name = null;
+        boolean modernName = false;
+        boolean hasProperties = false;
         ArrayList<String> properties = new ArrayList<>();
         while (true) {
             int tag = u8();
             if (tag == 0) break;
             String key = string();
-            if ((key.equals("Name") || key.equals("id") || key.isEmpty()) && tag == 8) name = string();
+            if ((key.equals("Name") || key.equals("id") || key.isEmpty()) && tag == 8) {
+                name = string();
+                modernName = !key.equals("Name");
+            }
             else if ((key.equals("Properties") || key.equals("properties")) && tag == 10) {
+                hasProperties = true;
                 while (true) {
                     int propertyTag = u8();
                     if (propertyTag == 0) break;
@@ -132,7 +153,7 @@ public final class NbtReader {
             } else skip(tag);
         }
         if (name == null) throw new IOException("Block state without Name");
-        if (properties.isEmpty()) return name;
+        if (properties.isEmpty()) return modernName && !hasProperties ? defaults.state(name) : name;
         Collections.sort(properties);
         return name + "[" + String.join(",", properties) + "]";
     }

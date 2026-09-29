@@ -31,7 +31,7 @@ public final class Reader {
         if (kind != 1 && kind != 2) throw new IOException("Invalid kind");
         regionX = in.readInt(); regionZ = in.readInt();
         flags = in.readUnsignedByte();
-        if ((flags & ~3) != 0 || in.readUnsignedByte() != 0) throw new IOException("Invalid flags");
+        if ((flags & ~7) != 0 || in.readUnsignedByte() != 0) throw new IOException("Invalid flags");
         blocks = table(in);
         biomes = kind == 1 ? table(in) : List.of();
         int expectedOffset = bytes.length - in.available() + 8192;
