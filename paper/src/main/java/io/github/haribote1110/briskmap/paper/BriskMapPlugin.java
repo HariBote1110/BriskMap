@@ -1,7 +1,6 @@
 package io.github.haribote1110.briskmap.paper;
 
 import io.github.haribote1110.briskmap.core.BlockDefaults;
-import io.github.haribote1110.briskmap.core.ExtractOptions;
 import io.github.haribote1110.briskmap.paper.config.BriskMapConfig;
 import io.github.haribote1110.briskmap.paper.config.ConfigLoader;
 import io.github.haribote1110.briskmap.paper.extract.ExtractionService;
@@ -133,11 +132,8 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
     }
 
     private void startExtraction() {
-        ExtractOptions configured = settings.options();
-        ExtractOptions options = new ExtractOptions(configured.hideCaves(), configured.surfaceFluids(),
-                configured.compressionLevel(), configured.do2d(), configured.do3d(), blockDefaults);
         extraction = new ExtractionService(settings.extractThreads(), settings.scanIntervalSeconds(),
-                options, getLogger(), this::requestIndex);
+                settings.options().withBlockDefaults(blockDefaults), getLogger(), this::requestIndex);
     }
 
     private void addWorld(World world) {
