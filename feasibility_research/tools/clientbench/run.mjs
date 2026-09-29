@@ -68,7 +68,7 @@ export function collectProcCpu(entries, rootPid, ticksPerSecond) {
   const result = zeroCpu();
   for (const row of rows) {
     if (!descendants.has(row.pid)) continue;
-    const type = row.pid === Number(rootPid) ? 'browser' : /(?:^|\0)--type=([^\0]+)/.exec(row.cmdline)?.[1] ?? 'other';
+    const type = row.pid === Number(rootPid) ? 'browser' : /(?:^|[\0\s])--type=([^\0\s]+)/.exec(row.cmdline)?.[1] ?? 'other';
     const ms = Math.round(row.ticks * 1000 / ticksPerSecond);
     result.total += ms;
     result.byType[type] = (result.byType[type] ?? 0) + ms;
