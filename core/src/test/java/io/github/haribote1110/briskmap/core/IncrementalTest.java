@@ -152,6 +152,36 @@ class IncrementalTest {
         assertEquals(1, new Reader(file).chunkCount());
     }
 
+    @Test void blockDefaultsFlagForcesFullExtractionWhenItChanges() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "defaults-flag-");
+        Path input = dir.resolve("r.0.0.mca"), out = dir.resolve("out");
+        byte[][] chunks = new byte[1024][]; int[] stamps = new int[1024];
+        chunks[0] = chunk("minecraft:full", "minecraft:grass_block", false); stamps[0] = 42;
+        writeRegion(input, chunks, stamps);
+        ExtractOptions normalised = new ExtractOptions(false, true, 6, true, true, BlockDefaults.of(
+                java.util.Map.of("minecraft:grass_block", "minecraft:grass_block[snowy=false]")));
+        RegionExtractor.extract(input, out, OPTIONS);
+        for (String file : List.of("r.0.0.b2d", "r.0.0.b3d")) {
+            Reader reader = new Reader(out.resolve(file));
+            assertEquals(2, reader.flags);
+            assertTrue(reader.blocks.contains("minecraft:grass_block"));
+        }
+
+        RegionResult upgraded = RegionExtractor.update(input, out, normalised);
+        assertTrue(upgraded.written());
+        assertEquals(1, upgraded.chunksExtracted());
+        for (String file : List.of("r.0.0.b2d", "r.0.0.b3d")) {
+            Reader reader = new Reader(out.resolve(file));
+            assertEquals(6, reader.flags);
+            assertTrue(reader.blocks.contains("minecraft:grass_block[snowy=false]"));
+            assertFalse(reader.blocks.contains("minecraft:grass_block"));
+        }
+        assertFalse(RegionExtractor.update(input, out, normalised).written());
+
+        assertTrue(RegionExtractor.update(input, out, OPTIONS).written());
+        assertEquals(2, new Reader(out.resolve("r.0.0.b3d")).flags);
+    }
+
     @Test void worldDeletionCancellationAndProgress() throws Exception {
         Path dir = Files.createTempDirectory(Path.of("core/build"), "world-");
         Path input = dir.resolve("in"), out = dir.resolve("out");
