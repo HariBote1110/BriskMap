@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { request } from 'node:http';
-import { inflateRawSync } from 'node:zlib';
+import { inflateRawSync, deflateSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { cameraPosition, viewProjection, projectPoint } from '../camera.mjs';
 import { selectChunks, coalesceRanges, loadRegionHeader, loadSelectedChunks } from '../loader.mjs';
 import { decodeRegion } from '../../mesher/src/format.mjs';
@@ -59,12 +60,34 @@ test('coalescing agrees with a simple reference', () => {
 test('server ranges and loader match whole-file decoder', async t => {
   const socket = createServer(); await new Promise(resolve=>socket.listen(0,'127.0.0.1',resolve));
   const port=socket.address().port; socket.close(); await once(socket,'close');
-  const server=spawn(process.execPath,[new URL('../serve.mjs',import.meta.url).pathname,'--root',toolsRoot,'--data',dataRoot,'--port',String(port),'--host','127.0.0.1'],{stdio:'pipe'});
+  const textureRoot=await mkdtemp(new URL('./textures-fixture-',import.meta.url).pathname);
+  t.after(()=>rm(textureRoot,{recursive:true,force:true}));
+  function pngChunk(type,data){
+    const name=Buffer.from(type), length=Buffer.alloc(4), crc=Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    let value=0xffffffff;
+    for(const byte of Buffer.concat([name,data])){value^=byte;for(let bit=0;bit<8;bit++)value=(value>>>1)^((value&1)?0xedb88320:0);}
+    crc.writeUInt32BE((value^0xffffffff)>>>0);
+    return Buffer.concat([length,name,data,crc]);
+  }
+  const pixels=Buffer.alloc(32*(1+16*4));
+  for(let y=0;y<32;y++)for(let x=0;x<16;x++){
+    const at=y*(1+16*4)+1+x*4,magenta=y<16&&((x>>3)^(y>>3))===0;
+    pixels[at]=y>=16?100:magenta?255:0;pixels[at+1]=y>=16?150:0;pixels[at+2]=y>=16?200:magenta?255:0;pixels[at+3]=255;
+  }
+  const pngHeader=Buffer.alloc(13);pngHeader.writeUInt32BE(16,0);pngHeader.writeUInt32BE(32,4);pngHeader[8]=8;pngHeader[9]=6;
+  const atlas=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),pngChunk('IHDR',pngHeader),pngChunk('IDAT',deflateSync(pixels)),pngChunk('IEND',Buffer.alloc(0))]);
+  await writeFile(join(textureRoot,'atlas.png'),atlas);
+  await writeFile(join(textureRoot,'blocks.json'),JSON.stringify({format:1,source:'synthetic.jar',tile:16,layers:2,textures:['<missing>','minecraft:block/stone'],tints:['none','grass','foliage','water','other'],blocks:{'minecraft:stone':[{when:{},faces:[1,1,1,1,1,1],tints:[0,0,0,0,0,0],fullCube:true,transparent:false}]}}));
+  const server=spawn(process.execPath,[new URL('../serve.mjs',import.meta.url).pathname,'--root',toolsRoot,'--data',dataRoot,'--textures',textureRoot,'--port',String(port),'--host','127.0.0.1'],{stdio:'pipe'});
   t.after(()=>server.kill());
   const base=`http://127.0.0.1:${port}`;
   let ready=false;
   for (let i=0;i<100;i++) {try {const r=await fetch(`${base}/viewer/index.html`);if(r.ok){ready=true;break;}}catch{} await new Promise(resolve=>setTimeout(resolve,20));}
   assert.ok(ready,'server started');
+  const texture=await fetch(base+'/textures/atlas.png',{headers:{Range:'bytes=1-3'}});
+  assert.equal(texture.status,206); assert.equal(texture.headers.get('cache-control'),'no-store'); assert.equal(texture.headers.get('content-type'),'image/png'); assert.deepEqual([...new Uint8Array(await texture.arrayBuffer())],[80,78,71]);
+  const table=await fetch(base+'/textures/blocks.json'); assert.equal((await table.json()).format,1);
   const path='/data/r.0.0.b3d';
   const range=await fetch(base+path,{headers:{Range:'bytes=0-13'}});
   assert.equal(range.status,206); assert.match(range.headers.get('content-range'),/^bytes 0-13\//); assert.equal((await range.arrayBuffer()).byteLength,14);
