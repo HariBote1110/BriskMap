@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#eef2f8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#12161d" media="(prefers-color-scheme: dark)">
+  <title>BriskMap</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%237dabff'/%3E%3Cpath d='M4 24l8-10 5 6 4-4 7 8z' fill='%232f7d32'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="ui/styles.css">
+  <script type="module" src="ui/app.mjs"></script>
+</head>
+<body>
+  <main class="app" id="app">
+    <canvas class="map-canvas" id="map-canvas" role="application" aria-label="Map"></canvas>
+
+    <div class="hud" id="hud" hidden>
+      <div class="hud-top">
+        <div class="picker" id="picker">
+          <button type="button" class="panel picker-button" id="picker-button"
+                  aria-haspopup="listbox" aria-expanded="false" aria-controls="picker-list">
+            <span class="dim-icon" id="picker-icon"></span>
+            <span class="picker-name" id="picker-name"></span>
+            <span class="picker-chevron" id="picker-chevron"></span>
+          </button>
+          <ul class="panel picker-list" id="picker-list" role="listbox" tabindex="-1" hidden></ul>
+        </div>
+
+        <div class="toolbar" id="toolbar">
+          <div class="panel segmented" role="group" id="mode-group">
+            <button type="button" class="segment" data-mode="2d" aria-pressed="false">2D</button>
+            <button type="button" class="segment" data-mode="3d" aria-pressed="true">3D</button>
+          </div>
+          <div class="panel tool-group">
+            <button type="button" class="icon-button" id="copy-link"></button>
+            <button type="button" class="icon-button" id="help-button" aria-haspopup="dialog"></button>
+          </div>
+          <div class="panel bubble" id="copy-bubble" hidden></div>
+          <div class="panel manual-copy" id="manual-copy" hidden>
+            <label for="manual-copy-input" id="manual-copy-label"></label>
+            <div class="manual-copy-row">
+              <input id="manual-copy-input" type="text" readonly spellcheck="false">
+              <button type="button" class="icon-button" id="manual-copy-close"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hud-bottom">
+        <div class="notes" id="notes"></div>
+        <div class="panel progress" id="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" hidden>
+          <span class="progress-text" id="progress-text"></span>
+          <span class="progress-track"><span class="progress-bar" id="progress-bar"></span></span>
+        </div>
+        <div class="panel coords" id="coords" role="group">
+          <span class="coord"><span class="coord-axis">X</span><span class="coord-value" id="coord-x">–</span></span>
+          <span class="coord" id="coord-y-wrap"><span class="coord-axis">Y</span><span class="coord-value" id="coord-y">–</span></span>
+          <span class="coord"><span class="coord-axis">Z</span><span class="coord-value" id="coord-z">–</span></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="state-layer" id="state-layer" hidden></div>
+    <div class="visually-hidden" id="announcer" aria-live="polite" aria-atomic="true"></div>
+  </main>
+
+  <dialog class="help-dialog" id="help-dialog" aria-labelledby="help-title">
+    <div class="help-header">
+      <h2 id="help-title"></h2>
+      <button type="button" class="icon-button" id="help-close"></button>
+    </div>
+    <p class="help-current" id="help-current"></p>
+    <div class="help-body" id="help-body"></div>
+    <p class="help-note" id="help-note"></p>
+  </dialog>
+
+  <noscript>
+    <p class="noscript">BriskMap needs JavaScript to show the map. / 地図の表示には JavaScript が必要です。</p>
+  </noscript>
+</body>
+</html>
