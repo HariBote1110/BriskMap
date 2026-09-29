@@ -205,7 +205,7 @@ export async function createViewer(canvas, options) {
     const z0 = Math.floor((view.z - reach) / cell) * cell, z1 = view.z + reach;
     for (let x = x0; x < x1; x += cell) {
       for (let z = z0; z < z1; z += cell) {
-        ctx.fillStyle = palette(noise(x + cell / 2, z + cell / 2, 384));
+        ctx.fillStyle = palette(noise(x + cell / 2, z + cell / 2, 112));
         ctx.fillRect((x - view.x) * scale, (z - view.z) * scale, cell * scale + 0.6, cell * scale + 0.6);
       }
     }
