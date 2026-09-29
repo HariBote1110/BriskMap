@@ -34,18 +34,29 @@ class MilestoneTest {
     }
 
     @Test void regionFolders() throws Exception {
-        Path old = Files.createDirectories(temp.resolve("region"));
-        Path nether = Files.createDirectories(temp.resolve("DIM-1/region"));
-        Path end = Files.createDirectories(temp.resolve("DIM1/region"));
-        assertEquals(old, RegionFolderResolver.resolve(temp, "minecraft", "overworld", RegionFolderResolver.Environment.NORMAL).orElseThrow());
-        assertEquals(nether, RegionFolderResolver.resolve(temp, "minecraft", "the_nether", RegionFolderResolver.Environment.NETHER).orElseThrow());
-        assertEquals(end, RegionFolderResolver.resolve(temp, "minecraft", "the_end", RegionFolderResolver.Environment.THE_END).orElseThrow());
-        Path modern = Files.createDirectories(temp.resolve("dimensions/minecraft/the_nether/region"));
-        Path modernNormal = Files.createDirectories(temp.resolve("dimensions/minecraft/overworld/region"));
-        Path modernEnd = Files.createDirectories(temp.resolve("dimensions/minecraft/the_end/region"));
-        assertEquals(modernNormal, RegionFolderResolver.resolve(temp, "minecraft", "overworld", RegionFolderResolver.Environment.NORMAL).orElseThrow());
-        assertEquals(modernEnd, RegionFolderResolver.resolve(temp, "minecraft", "the_end", RegionFolderResolver.Environment.THE_END).orElseThrow());
-        assertEquals(modern, RegionFolderResolver.resolve(temp, "minecraft", "the_nether", RegionFolderResolver.Environment.NETHER).orElseThrow());
+        Path modernRoot = temp.resolve("modern/world");
+        Path modernNormal = Files.createDirectories(modernRoot.resolve("dimensions/minecraft/overworld/region"));
+        Path modernNether = Files.createDirectories(modernRoot.resolve("dimensions/minecraft/the_nether/region"));
+        Path modernEnd = Files.createDirectories(modernRoot.resolve("dimensions/minecraft/the_end/region"));
+        for (Path region : List.of(modernNormal, modernNether, modernEnd)) Files.createFile(region.resolve("r.0.0.mca"));
+        assertEquals(modernNormal, RegionFolderResolver.resolve(modernNormal.getParent(), "minecraft", "overworld", RegionFolderResolver.Environment.NORMAL).orElseThrow());
+        assertEquals(modernNether, RegionFolderResolver.resolve(modernNether.getParent(), "minecraft", "the_nether", RegionFolderResolver.Environment.NETHER).orElseThrow());
+        assertEquals(modernEnd, RegionFolderResolver.resolve(modernEnd.getParent(), "minecraft", "the_end", RegionFolderResolver.Environment.THE_END).orElseThrow());
+
+        Path legacyRoot = temp.resolve("legacy");
+        Path old = Files.createDirectories(legacyRoot.resolve("world/region"));
+        Path nether = Files.createDirectories(legacyRoot.resolve("world_nether/DIM-1/region"));
+        Path end = Files.createDirectories(legacyRoot.resolve("world_the_end/DIM1/region"));
+        Files.createFile(old.resolve("r.0.0.mca"));
+        Files.createFile(nether.resolve("r.-1.2.mca"));
+        Files.createFile(end.resolve("r.0.0.mca"));
+        Files.createDirectories(legacyRoot.resolve("world_nether/region"));
+        assertEquals(old, RegionFolderResolver.resolve(old.getParent(), "minecraft", "overworld", RegionFolderResolver.Environment.NORMAL).orElseThrow());
+        assertEquals(nether, RegionFolderResolver.resolve(legacyRoot.resolve("world_nether"), "minecraft", "the_nether", RegionFolderResolver.Environment.NETHER).orElseThrow());
+        assertEquals(end, RegionFolderResolver.resolve(legacyRoot.resolve("world_the_end"), "minecraft", "the_end", RegionFolderResolver.Environment.THE_END).orElseThrow());
+        assertEquals(modernNether, RegionFolderResolver.resolve(modernRoot, "minecraft", "the_nether", RegionFolderResolver.Environment.NETHER).orElseThrow());
+        Files.delete(nether.resolve("r.-1.2.mca"));
+        assertEquals(legacyRoot.resolve("world_nether/region"), RegionFolderResolver.resolve(legacyRoot.resolve("world_nether"), "minecraft", "the_nether", RegionFolderResolver.Environment.NETHER).orElseThrow());
         assertTrue(RegionFolderResolver.resolve(temp.resolve("missing"), "minecraft", "overworld", RegionFolderResolver.Environment.NORMAL).isEmpty());
     }
 
