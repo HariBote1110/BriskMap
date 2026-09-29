@@ -1,12 +1,29 @@
 use std::sync::{Mutex, OnceLock};
 
 const VOLUME: usize = 16 * 384 * 16;
-static CELLS: OnceLock<Mutex<Vec<u32>>> = OnceLock::new();
+const WORDS_PER_FACE: usize = VOLUME / 32;
+static SCRATCH: OnceLock<Mutex<Scratch>> = OnceLock::new();
 const DIMENSIONS: [usize; 3] = [16, 384, 16];
-const STEPS: [usize; 3] = [1, 256, 16];
 // Anticlockwise from outside: negative faces 00,01,11,10; positive faces 00,10,11,01.
 const CORNER_U: [[usize; 4]; 2] = [[0, 0, 1, 1], [0, 1, 1, 0]];
 const CORNER_V: [[usize; 4]; 2] = [[0, 1, 1, 0], [0, 0, 1, 1]];
+
+struct Scratch {
+    cells: Vec<u32>,
+    keys: Vec<u32>,
+    ao_grid: Vec<u8>,
+    present: Vec<u32>,
+}
+impl Scratch {
+    fn new() -> Self {
+        Self {
+            cells: vec![0; VOLUME],
+            keys: vec![0; 6 * VOLUME],
+            ao_grid: vec![0; 6 * VOLUME],
+            present: vec![0; 6 * WORDS_PER_FACE],
+        }
+    }
+}
 
 struct Materials<'a> {
     face_layers: &'a [u8],
@@ -112,14 +129,18 @@ unsafe fn mesh_raw(
     {
         return Err(1);
     }
-    let mut cells = CELLS
-        .get_or_init(|| Mutex::new(vec![0u32; VOLUME]))
+    let mut scratch = SCRATCH
+        .get_or_init(|| Mutex::new(Scratch::new()))
         .lock()
         .unwrap();
+    let Scratch {
+        cells,
+        keys,
+        ao_grid,
+        present,
+    } = &mut *scratch;
     cells.fill(0);
-    let mut keys = vec![0u32; 6 * VOLUME];
-    let mut ao_grid = vec![0u8; 6 * VOLUME];
-    let mut present = vec![0u8; 6 * VOLUME];
+    present.fill(0);
     for i in 0..count {
         let p = positions_ptr.add(i * 4).cast::<u32>().read_unaligned() as usize;
         let palette = palettes_ptr.add(i * 4).cast::<u32>().read_unaligned() as usize;
@@ -171,7 +192,15 @@ unsafe fn mesh_raw(
                 };
                 packed_ao |= ao << (corner * 2);
             }
-            let at = normal * VOLUME + p;
+            let x = xyz[0] as usize;
+            let y = xyz[1] as usize;
+            let z = xyz[2] as usize;
+            let rank = match axis {
+                0 => (x * 16 + z) * 384 + y,
+                1 => (y * 16 + x) * 16 + z,
+                _ => (z * 384 + y) * 16 + x,
+            };
+            let at = normal * VOLUME + rank;
             let face = palette * 6 + normal;
             let layer = u16::from_le_bytes([
                 materials.face_layers[face * 2],
@@ -181,7 +210,7 @@ unsafe fn mesh_raw(
                 | (materials.face_tints[face] as u32) << 16
                 | (materials.alpha_test[palette] as u32) << 24;
             ao_grid[at] = packed_ao;
-            present[at] = 1;
+            present[normal * WORDS_PER_FACE + rank / 32] |= 1 << (rank % 32);
         }
     }
     let mut output = Output::new();
@@ -189,52 +218,56 @@ unsafe fn mesh_raw(
         for direction in 0..2 {
             let normal = axis * 2 + direction;
             let base = normal * VOLUME;
+            let word_base = normal * WORDS_PER_FACE;
             let u_axis = (axis + 1) % 3;
             let v_axis = (axis + 2) % 3;
             let u_limit = DIMENSIONS[u_axis];
             let v_limit = DIMENSIONS[v_axis];
-            let u_step = STEPS[u_axis];
-            let v_step = STEPS[v_axis];
-            let slice_step = STEPS[axis];
-            for slice in 0..DIMENSIONS[axis] {
-                for v in 0..v_limit {
-                    for u in 0..u_limit {
-                        let at = base + slice * slice_step + v * v_step + u * u_step;
-                        if present[at] == 0 {
-                            continue;
+            let slice_size = u_limit * v_limit;
+            for word in 0..WORDS_PER_FACE {
+                while present[word_base + word] != 0 {
+                    let rank = word * 32 + present[word_base + word].trailing_zeros() as usize;
+                    let slice = rank / slice_size;
+                    let remainder = rank - slice * slice_size;
+                    let v = remainder / u_limit;
+                    let u = remainder - v * u_limit;
+                    let at = base + rank;
+                    let key = keys[at];
+                    let packed_ao = ao_grid[at];
+                    let mut width = 1;
+                    let mut height = 1;
+                    if greedy {
+                        while u + width < u_limit
+                            && (present[word_base + (rank + width) / 32]
+                                & (1 << ((rank + width) % 32)))
+                                != 0
+                            && keys[at + width] == key
+                            && ao_grid[at + width] == packed_ao
+                        {
+                            width += 1;
                         }
-                        let key = keys[at];
-                        let packed_ao = ao_grid[at];
-                        let mut width = 1;
-                        let mut height = 1;
-                        if greedy {
-                            while u + width < u_limit
-                                && present[at + width * u_step] != 0
-                                && keys[at + width * u_step] == key
-                                && ao_grid[at + width * u_step] == packed_ao
-                            {
-                                width += 1;
-                            }
-                            'height: while v + height < v_limit {
-                                for w in 0..width {
-                                    let next = at + height * v_step + w * u_step;
-                                    if present[next] == 0
-                                        || keys[next] != key
-                                        || ao_grid[next] != packed_ao
-                                    {
-                                        break 'height;
-                                    }
-                                }
-                                height += 1;
-                            }
-                        }
-                        for h in 0..height {
+                        'height: while v + height < v_limit {
                             for w in 0..width {
-                                present[at + h * v_step + w * u_step] = 0;
+                                let next_rank = rank + height * u_limit + w;
+                                let next = base + next_rank;
+                                if (present[word_base + next_rank / 32] & (1 << (next_rank % 32)))
+                                    == 0
+                                    || keys[next] != key
+                                    || ao_grid[next] != packed_ao
+                                {
+                                    break 'height;
+                                }
                             }
+                            height += 1;
                         }
-                        output.quad(axis, direction, slice, u, v, width, height, key, packed_ao);
                     }
+                    for h in 0..height {
+                        for w in 0..width {
+                            let next_rank = rank + h * u_limit + w;
+                            present[word_base + next_rank / 32] &= !(1 << (next_rank % 32));
+                        }
+                    }
+                    output.quad(axis, direction, slice, u, v, width, height, key, packed_ao);
                 }
             }
         }

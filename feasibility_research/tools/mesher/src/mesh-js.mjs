@@ -1,7 +1,10 @@
 const volume = 16 * 384 * 16;
 const dimensions = [16, 384, 16];
-const steps = [1, 256, 16];
+const wordsPerFace = volume >>> 5;
 const cells = new Uint32Array(volume);
+const keys = new Uint32Array(6 * volume);
+const aoGrid = new Uint8Array(6 * volume);
+const present = new Uint32Array(6 * wordsPerFace);
 // Anticlockwise from outside: negative faces 00,01,11,10; positive faces 00,10,11,01.
 const cornerU = [[0, 0, 1, 1], [0, 1, 1, 0]];
 const cornerV = [[0, 1, 1, 0], [0, 0, 1, 1]];
@@ -13,7 +16,7 @@ export function meshChunk({ positions, paletteIndices, masks, materials }, mode 
   const paletteCount = opaque.length;
   if (faceLayers.length !== paletteCount * 6 || faceTints.length !== paletteCount * 6 || alphaTest.length !== paletteCount) throw new Error('Mismatched material lengths');
   cells.fill(0);
-  const keys = new Uint32Array(6 * volume), aoGrid = new Uint8Array(6 * volume), present = new Uint8Array(6 * volume);
+  present.fill(0);
   for (let i = 0; i < positions.length; i++) {
     const p = positions[i], palette = paletteIndices[i], mask = masks[i];
     if (p >= volume || palette >= paletteCount || !mask || mask & 0xc0) throw new Error('Invalid mesh input');
@@ -39,9 +42,10 @@ export function meshChunk({ positions, paletteIndices, masks, materials }, mode 
         const diagonal = solid(nx + (uAxis === 0 ? du : 0) + (vAxis === 0 ? dv : 0), ny + (uAxis === 1 ? du : 0) + (vAxis === 1 ? dv : 0), nz + (uAxis === 2 ? du : 0) + (vAxis === 2 ? dv : 0));
         packedAo |= (s1 && s2 ? 0 : 3 - s1 - s2 - diagonal) << (corner * 2);
       }
-      const at = normal * volume + p, face = palette * 6 + normal;
+      const rank = axis === 0 ? (x * 16 + z) * 384 + y : axis === 1 ? (y * 16 + x) * 16 + z : (z * 384 + y) * 16 + x;
+      const at = normal * volume + rank, face = palette * 6 + normal;
       keys[at] = faceLayers[face] | faceTints[face] << 16 | alphaTest[palette] << 24;
-      aoGrid[at] = packedAo; present[at] = 1;
+      aoGrid[at] = packedAo; present[normal * wordsPerFace + (rank >>> 5)] |= 1 << (rank & 31);
     }
   }
   let vertices = new Uint8Array(4096), indices = new Uint32Array(1024);
@@ -73,23 +77,25 @@ export function meshChunk({ positions, paletteIndices, masks, materials }, mode 
     quads++;
   }
   for (let axis = 0; axis < 3; axis++) for (let direction = 0; direction < 2; direction++) {
-    const normal = axis * 2 + direction, base = normal * volume;
+    const normal = axis * 2 + direction, base = normal * volume, wordBase = normal * wordsPerFace;
     const uAxis = (axis + 1) % 3, vAxis = (axis + 2) % 3;
     const uLimit = dimensions[uAxis], vLimit = dimensions[vAxis];
-    const uStep = steps[uAxis], vStep = steps[vAxis], sliceStep = steps[axis];
-    for (let slice = 0; slice < dimensions[axis]; slice++) for (let v = 0; v < vLimit; v++) for (let u = 0; u < uLimit; u++) {
-      const at = base + slice * sliceStep + v * vStep + u * uStep;
-      if (!present[at]) continue;
+    const sliceSize = uLimit * vLimit;
+    for (let word = 0; word < wordsPerFace; word++) while (present[wordBase + word]) {
+      const rank = (word << 5) + 31 - Math.clz32(present[wordBase + word] & -present[wordBase + word]);
+      const slice = Math.floor(rank / sliceSize), remainder = rank - slice * sliceSize;
+      const v = Math.floor(remainder / uLimit), u = remainder - v * uLimit;
+      const at = base + rank;
       const key = keys[at], packedAo = aoGrid[at];
       let width = 1, height = 1;
       if (mode === 'greedy') {
-        while (u + width < uLimit && present[at + width * uStep] && keys[at + width * uStep] === key && aoGrid[at + width * uStep] === packedAo) width++;
+        while (u + width < uLimit && (present[wordBase + ((rank + width) >>> 5)] & (1 << ((rank + width) & 31))) && keys[at + width] === key && aoGrid[at + width] === packedAo) width++;
         outer: while (v + height < vLimit) {
-          for (let w = 0; w < width; w++) { const next = at + height * vStep + w * uStep; if (!present[next] || keys[next] !== key || aoGrid[next] !== packedAo) break outer; }
+          for (let w = 0; w < width; w++) { const nextRank = rank + height * uLimit + w, next = base + nextRank; if (!(present[wordBase + (nextRank >>> 5)] & (1 << (nextRank & 31))) || keys[next] !== key || aoGrid[next] !== packedAo) break outer; }
           height++;
         }
       }
-      for (let h = 0; h < height; h++) for (let w = 0; w < width; w++) present[at + h * vStep + w * uStep] = 0;
+      for (let h = 0; h < height; h++) for (let w = 0; w < width; w++) { const nextRank = rank + h * uLimit + w; present[wordBase + (nextRank >>> 5)] &= ~(1 << (nextRank & 31)); }
       quad(axis, direction, slice, u, v, width, height, key, packedAo);
     }
   }
