@@ -82,3 +82,15 @@ test('random culled AO matches independent cell reference',()=>{
 test('greedy coverage retains every material and AO with no overlap',()=>{for(const sample of samples)assert.deepEqual(coverage(meshJs(sample,'greedy')),coverage(meshJs(sample,'culled')));});
 test('AO selects the brighter diagonal',()=>{let flips=0;for(const sample of samples)for(const mode of ['culled','greedy']){const mesh=meshJs(sample,mode);for(const quad of quads(mesh))if(quad.ao[0]+quad.ao[2]<quad.ao[1]+quad.ao[3])flips++;}assert.ok(flips>0);});
 test('JS and WASM outputs are byte identical',async()=>{const wasm=await loadMesher();for(const sample of samples)for(const mode of ['culled','greedy']){const js=meshJs(sample,mode),rs=wasm.meshChunk(sample,mode);assert.deepEqual(rs.vertices,js.vertices);assert.deepEqual(new Uint8Array(rs.indices.buffer),new Uint8Array(js.indices.buffer));}});
+test('reused scratch state clears previous blocks and faces',async()=>{
+  const wasm=(await loadMesher()).meshChunk;
+  const near=input([{p:0,palette:0,mask:63},{p:1,palette:0,mask:63}]);
+  const far=input([{p:98303,palette:1,mask:63}]);
+  for(const mesh of [meshJs,wasm])for(const mode of ['culled','greedy']){
+    const first=mesh(near,mode);
+    mesh(far,mode);
+    const again=mesh(near,mode);
+    assert.deepEqual(again.vertices,first.vertices);
+    assert.deepEqual(again.indices,first.indices);
+  }
+});
