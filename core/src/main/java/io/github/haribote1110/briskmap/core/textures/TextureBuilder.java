@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -73,9 +74,12 @@ public final class TextureBuilder {
     }
 
     static void atomicWrite(Path destination, byte[] bytes) throws IOException {
-        Path temporary = Files.createTempFile(destination.getParent(), destination.getFileName().toString(), ".tmp");
+        Path temporary = destination.resolveSibling(destination.getFileName() + ".tmp");
         try {
-            Files.write(temporary, bytes);
+            try (var stream = Files.newOutputStream(temporary, StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+                stream.write(bytes);
+            }
             Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } finally { Files.deleteIfExists(temporary); }
     }

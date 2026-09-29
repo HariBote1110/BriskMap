@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -37,9 +38,13 @@ public final class MapIndexWriter {
         String body = body(maps, knownVersions, textures);
         if (body.equals(content)) return false;
         Files.createDirectories(index.getParent());
-        Path temporary = Files.createTempFile(index.getParent(), "index-", ".tmp");
+        Path temporary = index.resolveSibling(index.getFileName() + ".tmp");
         try {
-            Files.writeString(temporary, body.replace("\"generated\":0", "\"generated\":" + System.currentTimeMillis()), StandardCharsets.UTF_8);
+            try (var stream = Files.newOutputStream(temporary, StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+                stream.write(body.replace("\"generated\":0", "\"generated\":" + System.currentTimeMillis())
+                        .getBytes(StandardCharsets.UTF_8));
+            }
             Files.move(temporary, index, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } finally { Files.deleteIfExists(temporary); }
         content = body;
