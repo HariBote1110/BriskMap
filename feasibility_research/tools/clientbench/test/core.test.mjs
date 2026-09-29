@@ -2,7 +2,36 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import { parsePsTime, collectProcessCpu, detectSettle, orbitStatistics, classifyUrl } from '../run.mjs';
+import { parsePsTime, collectProcessCpu, detectSettle, orbitStatistics, classifyUrl, argumentsFrom, invalidReasons } from '../run.mjs';
+
+test('phone options parse with defaults and reject invalid durations', () => {
+  const defaults = argumentsFrom(['--chrome', 'chromium']);
+  assert.deepEqual([defaults.chromeFlags, defaults.mobile, defaults.label, defaults.settleTimeoutMs, defaults.orbitMs], [[], false, null, 180000, 10000]);
+  const options = argumentsFrom(['--chrome', 'chromium', '--chrome-flags', '  --use-gl=angle   --disable-gpu ', '--mobile', '--label', 'phone gpu', '--settle-timeout-ms', '45000', '--orbit-ms', '3000']);
+  assert.deepEqual(options.chromeFlags, ['--use-gl=angle', '--disable-gpu']);
+  assert.equal(options.mobile, true);
+  assert.equal(options.label, 'phone gpu');
+  assert.equal(options.settleTimeoutMs, 45000);
+  assert.equal(options.orbitMs, 3000);
+  assert.throws(() => argumentsFrom(['--chrome', 'chromium', '--orbit-ms', '0']));
+  assert.throws(() => argumentsFrom(['--chrome', 'chromium', '--settle-timeout-ms', 'abc']));
+});
+
+test('every invalid-run reason is classified independently', () => {
+  const brisk = { viewer: 'brisk', timed_out: false, orbit: { frames: 2 }, transfer_bytes: 10 };
+  assert.deepEqual(invalidReasons(brisk, { screenshotFailed: false, briskReady: true, briskError: null }), []);
+  assert.deepEqual(invalidReasons({ ...brisk, timed_out: true }, { briskReady: true }), ['timed_out']);
+  assert.deepEqual(invalidReasons(brisk, { screenshotFailed: true, briskReady: true }), ['screenshot_failed']);
+  assert.deepEqual(invalidReasons({ ...brisk, orbit: { frames: 0 } }, { briskReady: true }), ['orbit_no_frames']);
+  assert.deepEqual(invalidReasons(brisk, { briskReady: false }), ['brisk_not_ready']);
+  assert.deepEqual(invalidReasons(brisk, { briskReady: true, briskError: 'boom' }), ['brisk_error']);
+  assert.deepEqual(invalidReasons({ ...brisk, transfer_bytes: 0 }, { briskReady: true }), ['zero_transfer_bytes']);
+  const blue = { ...brisk, viewer: 'bluemap', bluemap_view_distances: { hires: 256, lowres: 0 } };
+  assert.deepEqual(invalidReasons(blue, { setting: { hires: 256, lowres: 0 } }), []);
+  assert.deepEqual(invalidReasons({ ...blue, bluemap_view_distances: { hires: 100, lowres: 0 } }, { setting: { hires: 256, lowres: 0 } }), ['bluemap_view_distances_mismatch']);
+  assert.deepEqual(invalidReasons({ ...blue, bluemap_view_distances: { hires: 256, lowres: null } }, { setting: { hires: 256, lowres: 0 } }), ['bluemap_view_distances_mismatch']);
+  assert.deepEqual(invalidReasons({ ...blue, bluemap_view_distances: null }, { setting: { hires: 256, lowres: 0 } }), ['bluemap_view_distances_mismatch']);
+});
 
 test('ps time formats and descendant process types', () => {
   assert.equal(parsePsTime('0:01.23'), 1230);

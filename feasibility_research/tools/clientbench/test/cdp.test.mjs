@@ -5,8 +5,16 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CdpClient } from '../cdp.mjs';
+import { CdpClient, chromeArguments } from '../cdp.mjs';
 import { runOne } from '../run.mjs';
+
+test('Chrome arguments use mobile window, new headless mode and append supplied flags', () => {
+  const flags = chromeArguments(9222, '/tmp/profile', { mobile: true, headless: true, chromeFlags: ['--use-gl=angle', '--use-angle=swiftshader'] });
+  assert.ok(flags.includes('--window-size=412,915'));
+  assert.ok(flags.includes('--headless=new'));
+  assert.deepEqual(flags.slice(-3), ['--use-gl=angle', '--use-angle=swiftshader', 'about:blank']);
+  assert.ok(chromeArguments(9222, '/tmp/profile').includes('--window-size=1600,900'));
+});
 
 function fakeCdp(onMessage = () => {}) {
   const server = createServer();
@@ -48,6 +56,7 @@ function fakeCdp(onMessage = () => {}) {
           const expression = message.params.expression;
           let value;
           if (expression.includes('new Promise')) value = [0, 16, 32, 48];
+          else if (expression.includes('WEBGL_debug_renderer_info')) value = { renderer: 'Fake GPU', vendor: 'Fake vendor' };
           else if (expression.includes('window.__glStats')) value = { buffer_bytes: 7, texture_bytes: 9, calls: 2 };
           else value = { longTasks: [], ready: true, error: null, stats: { t_upload_done_ms: 100 } };
           result = { result: { value } };
@@ -80,8 +89,51 @@ test('fake CDP socket produces a complete JSON line', async () => {
     assert.equal(result.orbit.frames, 3);
     assert.equal(result.timed_out, false);
     assert.equal(result.target.y, 50.92);
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.invalid_reasons, []);
+    assert.deepEqual(result.viewport, { width: 1600, height: 900, dpr: 1, mobile: false });
+    assert.equal(result.gl_renderer, 'Fake GPU');
+    assert.equal(result.gl_vendor, 'Fake vendor');
     assert.equal(readFileSync(join(directory, 'brisk-A-top-1.png')).subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
     console.log(`JSONL sample: ${line}`);
+  } finally {
+    socket?.close();
+    await new Promise(resolve => server.close(resolve));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('mobile emulation commands precede navigation and renderer is evaluated', async () => {
+  const commands = [];
+  const server = fakeCdp(message => commands.push(message));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const directory = mkdtempSync(join(tmpdir(), 'clientbench-test-'));
+  let socket;
+  try {
+    const launch = async (_binary, options) => {
+      assert.equal(options.mobile, true);
+      assert.deepEqual(options.chromeFlags, ['--use-gl=angle']);
+      socket = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+      await new Promise(resolve => socket.addEventListener('open', resolve, { once: true }));
+      return { client: new CdpClient(socket), child: { pid: process.pid }, version: { Browser: 'Fake Chrome' }, close: async () => socket.close() };
+    };
+    const result = await runOne({ viewer: 'brisk', caseName: 'A', scenarioName: 'top', runNumber: 1,
+      scenario: { distance: 400, rotation: 0, angle: 0.1 }, setting: { radius: 256 }, chrome: 'fake',
+      mobile: true, chromeFlags: ['--use-gl=angle'], label: 'phone gpu', orbitMs: 3000, settleTimeoutMs: 10000,
+      out: join(directory, 'results.jsonl'), targetY: 50, url: 'http://local/viewer/index.html', launch });
+    const navigation = commands.findIndex(command => command.method === 'Page.navigate');
+    const methods = ['Emulation.setDeviceMetricsOverride', 'Emulation.setTouchEmulationEnabled', 'Emulation.setUserAgentOverride'];
+    for (const method of methods) assert.ok(commands.findIndex(command => command.method === method) < navigation);
+    assert.deepEqual(commands.find(command => command.method === methods[0]).params,
+      { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true, screenWidth: 412, screenHeight: 915 });
+    assert.deepEqual(commands.find(command => command.method === methods[1]).params, { enabled: true, maxTouchPoints: 5 });
+    assert.deepEqual(commands.find(command => command.method === methods[2]).params,
+      { userAgent: 'Mozilla/5.0 (Linux; Android 13; SM-A057F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36', platform: 'Linux armv8l' });
+    assert.deepEqual(result.viewport, { width: 412, height: 915, dpr: 2.625, mobile: true });
+    assert.equal(result.label, 'phone gpu');
+    assert.equal(result.gl_renderer, 'Fake GPU');
+    assert.equal(result.gl_vendor, 'Fake vendor');
+    assert.ok(commands.some(command => command.method === 'Runtime.evaluate' && command.params.expression.includes('WEBGL_debug_renderer_info')));
   } finally {
     socket?.close();
     await new Promise(resolve => server.close(resolve));
