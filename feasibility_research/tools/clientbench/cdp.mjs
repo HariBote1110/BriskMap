@@ -73,12 +73,18 @@ process.on('exit', () => {
   }
 });
 
-export async function launchChrome(binary, { headless = false } = {}) {
+export function chromeArguments(port, profile, { headless = false, chromeFlags = [], mobile = false } = {}) {
+  const flags = [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, mobile ? '--window-size=412,915' : '--window-size=1600,900', '--force-device-scale-factor=1', '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--enable-gpu'];
+  if (headless) flags.push('--headless=new');
+  flags.push(...chromeFlags);
+  flags.push('about:blank');
+  return flags;
+}
+
+export async function launchChrome(binary, options = {}) {
   const port = await freePort();
   const profile = mkdtempSync(join(tmpdir(), 'clientbench-'));
-  const flags = [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--window-size=1600,900', '--force-device-scale-factor=1', '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--enable-gpu'];
-  if (headless) flags.push('--headless');
-  flags.push('about:blank');
+  const flags = chromeArguments(port, profile, options);
   const child = spawn(binary, flags, { stdio: 'ignore', detached: true });
   let spawnError;
   child.on('error', error => { spawnError = error; });

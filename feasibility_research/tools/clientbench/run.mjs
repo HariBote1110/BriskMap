@@ -108,19 +108,42 @@ export function classifyUrl(viewer, url) {
   return 'other';
 }
 
-function argumentsFrom(argv) {
-  const options = { scenarios: join(base, 'scenarios.json'), runs: 3, out: join(base, 'results.jsonl'), headless: false };
+export function argumentsFrom(argv) {
+  const options = { scenarios: join(base, 'scenarios.json'), runs: 3, out: join(base, 'results.jsonl'), headless: false,
+    chromeFlags: [], mobile: false, label: null, settleTimeoutMs: 180000, orbitMs: 10000 };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--help') { options.help = true; continue; }
     if (arg === '--headless') { options.headless = true; continue; }
-    if (!['--chrome', '--scenarios', '--runs', '--out', '--only'].includes(arg) || !argv[i + 1]) throw new Error(`Unknown or incomplete option: ${arg}`);
-    options[arg.slice(2)] = argv[++i];
+    if (arg === '--mobile') { options.mobile = true; continue; }
+    if (!['--chrome', '--scenarios', '--runs', '--out', '--only', '--chrome-flags', '--label', '--settle-timeout-ms', '--orbit-ms'].includes(arg) || argv[i + 1] === undefined) throw new Error(`Unknown or incomplete option: ${arg}`);
+    const value = argv[++i];
+    if (arg === '--chrome-flags') options.chromeFlags = value.trim() ? value.trim().split(/\s+/) : [];
+    else if (arg === '--settle-timeout-ms') options.settleTimeoutMs = Number(value);
+    else if (arg === '--orbit-ms') options.orbitMs = Number(value);
+    else options[arg.slice(2)] = value;
   }
   options.runs = Number(options.runs);
   if (!options.help && (!options.chrome || !Number.isInteger(options.runs) || options.runs < 1)) throw new Error('Use --chrome BIN and --runs positive integer');
   if (options.only && (!/^(bluemap|brisk):[^:]+:[^:]+$/.test(options.only))) throw new Error('Use --only viewer:case:scenario');
+  if (![options.settleTimeoutMs, options.orbitMs].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('Timeout and orbit durations must be positive integers');
   return options;
+}
+
+export function invalidReasons(result, { screenshotFailed = false, briskReady = false, briskError = null, setting } = {}) {
+  const reasons = [];
+  if (result.timed_out) reasons.push('timed_out');
+  if (screenshotFailed) reasons.push('screenshot_failed');
+  if (result.orbit?.frames === 0) reasons.push('orbit_no_frames');
+  if (result.viewer === 'brisk') {
+    if (!briskReady) reasons.push('brisk_not_ready');
+    if (briskError) reasons.push('brisk_error');
+  }
+  if (result.viewer === 'bluemap' && (result.bluemap_view_distances?.hires == null || result.bluemap_view_distances?.lowres == null ||
+    Number(result.bluemap_view_distances.hires) !== Number(setting?.hires) ||
+    Number(result.bluemap_view_distances.lowres) !== Number(setting?.lowres))) reasons.push('bluemap_view_distances_mismatch');
+  if (result.transfer_bytes === 0) reasons.push('zero_transfer_bytes');
+  return reasons;
 }
 
 function pageUrl(viewer, scenario, setting, y) {
@@ -130,8 +153,8 @@ function pageUrl(viewer, scenario, setting, y) {
   return `http://192.168.0.175:8200/viewer/index.html?${query}`;
 }
 
-export async function runOne({ viewer, caseName, scenarioName, runNumber, scenario, setting, chrome, headless, out, targetY, url, append = true, launch = launchChrome }) {
-  const browser = await launch(chrome, { headless });
+export async function runOne({ viewer, caseName, scenarioName, runNumber, scenario, setting, chrome, headless, chromeFlags = [], mobile = false, label = null, settleTimeoutMs = 180000, orbitMs = 10000, out, targetY, url, append = true, launch = launchChrome }) {
+  const browser = await launch(chrome, { headless, chromeFlags, mobile });
   try {
     const { client, child, version } = browser;
     const requests = new Map();
@@ -213,26 +236,33 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
     if (viewer === 'bluemap') source = `localStorage.setItem('bluemap-hiresViewDistance', ${JSON.stringify(String(setting.hires))}); localStorage.setItem('bluemap-lowresViewDistance', ${JSON.stringify(String(setting.lowres))});\n` + source;
     await client.send('Page.addScriptToEvaluateOnNewDocument', { source });
     await client.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    if (mobile) {
+      await client.send('Emulation.setDeviceMetricsOverride', { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true, screenWidth: 412, screenHeight: 915 });
+      await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+      await client.send('Emulation.setUserAgentOverride', { userAgent: 'Mozilla/5.0 (Linux; Android 13; SM-A057F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36', platform: 'Linux armv8l' });
+    }
     const cpuStart = sampleCpu(child.pid);
     navigationAt = Date.now();
     await client.send('Page.navigate', { url: url ?? pageUrl(viewer, scenario, setting, targetY) });
     let settled = { settled: false, timedOut: false };
     let page = {};
     let error;
+    let briskReady = false;
     while (true) {
       try {
         page = await client.evaluate(`({longTasks: window.__longTasks || [], ready: window.__briskReady === true, error: window.__briskError || null, stats: window.__briskStats || null})`) ?? {};
       } catch (cause) { error = String(cause); }
+      briskReady ||= page.ready === true;
       const longTaskEvents = (page.longTasks ?? []).map(task => ({ kind: 'longtask', at: navigationAt + task.start, end: navigationAt + task.start + task.duration }));
       const upload = page.stats?.t_upload_done_ms;
-      settled = detectSettle([...events, ...longTaskEvents], { now: Date.now(), start: navigationAt, ready: viewer === 'bluemap' || page.ready, uploadDoneAt: Number.isFinite(upload) ? navigationAt + upload : navigationAt });
+      settled = detectSettle([...events, ...longTaskEvents], { now: Date.now(), start: navigationAt, ready: viewer === 'bluemap' || page.ready, timeoutMs: settleTimeoutMs, uploadDoneAt: Number.isFinite(upload) ? navigationAt + upload : navigationAt });
       if (settled.settled || settled.timedOut || page.error || attachmentError) break;
       await sleep(100);
     }
     const cpuSettle = sampleCpu(child.pid);
     const loadCpu = subtractCpu(cpuSettle, cpuStart);
     error ??= attachmentError;
-    let heapMb = null, gl = { buffer_bytes: 0, texture_bytes: 0 }, y = targetY, distances;
+    let heapMb = null, gl = { buffer_bytes: 0, texture_bytes: 0 }, glIdentity = null, y = targetY, distances;
     try {
       const metrics = await client.send('Performance.getMetrics');
       heapMb = (metrics.metrics.find(metric => metric.name === 'JSHeapUsedSize')?.value ?? 0) / 1048576;
@@ -243,11 +273,25 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
         distances = { hires: info?.hires ?? null, lowres: info?.lowres ?? null };
       }
     } catch (cause) { error ??= String(cause); }
+    try {
+      glIdentity = await client.evaluate(`(() => {
+        const canvases = [...document.querySelectorAll('canvas'), document.createElement('canvas')];
+        for (const canvas of canvases) {
+          try {
+            const context = canvas.getContext('webgl2') || canvas.getContext('webgl');
+            const info = context?.getExtension('WEBGL_debug_renderer_info');
+            if (info) return { renderer: context.getParameter(info.UNMASKED_RENDERER_WEBGL), vendor: context.getParameter(info.UNMASKED_VENDOR_WEBGL) };
+          } catch { /* This canvas cannot provide a WebGL context. */ }
+        }
+        return null;
+      })()`) ?? null;
+    } catch { /* Renderer details are optional when the browser cannot expose them. */ }
     const name = `${viewer}-${caseName}-${scenarioName}-${runNumber}.png`;
+    let screenshotFailed = false;
     try {
       const screenshot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
       writeFileSync(join(dirname(resolve(out)), name), Buffer.from(screenshot.data, 'base64'));
-    } catch (cause) { error ??= `Screenshot: ${cause}`; }
+    } catch (cause) { screenshotFailed = true; error ??= `Screenshot: ${cause}`; }
     let orbit = orbitStatistics([]);
     let orbitCpu = zeroCpu();
     if (!settled.timedOut && !page.error) {
@@ -260,7 +304,7 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
           let start;
           const tick = time => {
             if (start === undefined) start = time;
-            const progress = Math.min((time - start) / 10000, 1);
+            const progress = Math.min((time - start) / ${orbitMs}, 1);
             const rotation = initial + progress * 2 * Math.PI;
             ${viewer === 'bluemap' ? 'window.bluemap.mapViewer.controlsManager.rotation = rotation;' : 'window.__setCamera({ rotation });'}
             if (progress < 1) requestAnimationFrame(tick);
@@ -274,6 +318,7 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
     }
     const result = {
       viewer, case: caseName, scenario: scenarioName, run: runNumber,
+      label, viewport: mobile ? { width: 412, height: 915, dpr: 2.625, mobile: true } : { width: 1600, height: 900, dpr: 1, mobile: false },
       target: { x: 0, y, z: 0 }, distance: scenario.distance, rotation: scenario.rotation, angle: scenario.angle,
       settle_ms: settled.settleMs ?? null, timed_out: settled.timedOut,
       requests_total: Object.values(counts).reduce((sum, value) => sum + value, 0), requests_by_class: counts,
@@ -282,6 +327,7 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
       transfer_bytes: transferBytes, transfer_by_class: transfers,
       cpu_ms_load_total: loadCpu.total, cpu_ms_load_by_type: loadCpu.byType,
       gl_buffer_bytes: gl.buffer_bytes, gl_texture_bytes: gl.texture_bytes,
+      gl_renderer: glIdentity?.renderer ?? null, gl_vendor: glIdentity?.vendor ?? null,
       js_heap_used_mb: heapMb, long_tasks_count: page.longTasks?.length ?? 0,
       long_tasks_total_ms: (page.longTasks ?? []).reduce((sum, task) => sum + task.duration, 0),
       orbit, cpu_ms_orbit_total: orbitCpu.total, cpu_ms_orbit_by_type: orbitCpu.byType,
@@ -290,6 +336,9 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
       ...(error || page.error || settled.timedOut || networkErrors ? { error: error ?? page.error ?? (settled.timedOut ? 'Settle timeout' : `${networkErrors} network requests failed`) } : {}),
       ...(frameNavigatedAt ? { frame_navigated_at: new Date(frameNavigatedAt).toISOString() } : {}),
     };
+    result.invalid_reasons = invalidReasons(result, { screenshotFailed, briskReady, briskError: page.error, setting });
+    result.valid = result.invalid_reasons.length === 0;
+    if (!result.valid) console.error(`Invalid run ${viewer}:${caseName}:${scenarioName}:${runNumber}: ${result.invalid_reasons.join(', ')}`);
     if (append) appendFileSync(out, JSON.stringify(result) + '\n');
     return result;
   } finally { await browser.close(); }
@@ -297,7 +346,7 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
 
 export async function main(argv = process.argv.slice(2)) {
   const options = argumentsFrom(argv);
-  if (options.help) { console.log('Usage: node run.mjs --chrome <binary> --scenarios scenarios.json --runs 3 --out results.jsonl [--only viewer:case:scenario] [--headless]'); return; }
+  if (options.help) { console.log('Usage: node run.mjs --chrome <binary> --scenarios scenarios.json --runs 3 --out results.jsonl [--only viewer:case:scenario] [--headless] [--chrome-flags "<space-separated flags>"] [--mobile] [--label <text>] [--settle-timeout-ms <n>] [--orbit-ms <n>]'); return; }
   const configuration = JSON.parse(readFileSync(resolve(options.scenarios), 'utf8'));
   mkdirSync(dirname(resolve(options.out)), { recursive: true });
   const only = options.only?.split(':');
@@ -305,7 +354,7 @@ export async function main(argv = process.argv.slice(2)) {
     for (const [scenarioName, scenario] of Object.entries(configuration.scenarios)) {
       for (let runNumber = 1; runNumber <= options.runs; runNumber++) {
         if (only && (only[1] !== caseName || only[2] !== scenarioName)) continue;
-        const common = { caseName, scenarioName, runNumber, scenario, setting, chrome: options.chrome, headless: options.headless, out: options.out };
+        const common = { caseName, scenarioName, runNumber, scenario, setting, chrome: options.chrome, headless: options.headless, chromeFlags: options.chromeFlags, mobile: options.mobile, label: options.label, settleTimeoutMs: options.settleTimeoutMs, orbitMs: options.orbitMs, out: options.out };
         if (setting.radius === undefined && only?.[0] === 'brisk') continue;
         const blue = await runOne({ ...common, viewer: 'bluemap', targetY: 70, append: !only || only[0] === 'bluemap' });
         if (!only || only[0] === 'bluemap') console.log(JSON.stringify(blue));
