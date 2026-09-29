@@ -1,0 +1,7 @@
+name: BriskMap
+version: '${version}'
+main: io.github.haribote1110.briskmap.paper.BriskMapPlugin
+api-version: '1.21'
+description: Lightweight web map that extracts surfaces instead of rendering them.
+authors: [HariBote1110]
+website: https://github.com/HariBote1110/BriskMap

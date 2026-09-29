@@ -2,4 +2,4 @@
 
 新しいものが上。
 
-- （まだなし。大きな判断は `markdown/Decisions/` の ADR を参照）
+- [dev-environment.md](dev-environment.md) — ビルド（Gradle・Java 21 向け）と、実サーバー確認用の Paper 1.21.11 / 26.3 環境

@@ -1,0 +1,4 @@
+# Gradle
+.gradle/
+.gradle-home/
+build/
