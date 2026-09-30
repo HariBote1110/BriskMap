@@ -112,9 +112,11 @@ public final class ExtractionService implements AutoCloseable {
     private static void addNeighbours(String name, Set<String> present, Set<String> pending) {
         String[] parts = name.split("\\.");
         int x = Integer.parseInt(parts[1]), z = Integer.parseInt(parts[2]);
-        for (String neighbour : List.of("r." + (x - 1) + "." + z + ".mca", "r." + (x + 1) + "." + z + ".mca",
-                "r." + x + "." + (z - 1) + ".mca", "r." + x + "." + (z + 1) + ".mca"))
+        for (int dz = -1; dz <= 1; dz++) for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dz == 0) continue;
+            String neighbour = "r." + (x + dx) + "." + (z + dz) + ".mca";
             if (present.contains(neighbour)) pending.add(neighbour);
+        }
     }
 
     private static void removeOrphanedOutputs(MapTarget target, Set<String> present) throws IOException {

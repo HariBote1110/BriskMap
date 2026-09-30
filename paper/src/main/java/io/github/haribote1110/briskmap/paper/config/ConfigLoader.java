@@ -23,6 +23,7 @@ public final class ConfigLoader {
         String caves = choice(values, warning, "extract.caves", "hide", "hide", "show");
         String fluids = choice(values, warning, "extract.fluids", "surface", "surface", "all");
         int compression = number(values, warning, "extract.compression-level", 6, 0, 9);
+        int caveDepth = number(values, warning, "extract.cave-depth", 16, 0, 16);
         int interval = number(values, warning, "extract.scan-interval-seconds", 30, 1, 86400);
         Object excluded = values.apply("worlds.exclude");
         List<String> worlds = List.of();
@@ -40,7 +41,7 @@ public final class ConfigLoader {
         } else if (configuredMaps != null) warning.accept("Invalid maps; using defaults");
         cuts.values().removeIf(java.util.Objects::isNull);
         return new BriskMapConfig(web, bind, port, webThreads, threads, caves, fluids,
-                compression, interval, worlds, download, cuts);
+                compression, caveDepth, interval, worlds, download, cuts);
     }
 
     private static boolean bool(Function<String, ?> values, Consumer<String> warning, String key, boolean fallback) {

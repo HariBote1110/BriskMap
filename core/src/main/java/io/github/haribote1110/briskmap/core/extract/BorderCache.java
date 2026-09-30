@@ -6,6 +6,46 @@ public final class BorderCache {
     private final long[][][] masks = new long[1152][][];
     private final long[][][] water = new long[1152][][], lava = new long[1152][][];
 
+    public void putFluids(int index, Chunk chunk, int maxY) {
+        fluidEdges(index, chunk, 15, maxY);
+    }
+
+    public void putAdjacentFluids(int direction, int coordinate, Chunk chunk, int maxY) {
+        fluidEdges(1024 + direction * 32 + coordinate, chunk, 1 << (direction ^ 1), maxY);
+    }
+
+    private void fluidEdges(int index, Chunk chunk, int sidesNeeded, int maxY) {
+        if (chunk == null || !"minecraft:full".equals(chunk.status)) return;
+        long[][] waterSides = new long[4][], lavaSides = new long[4][];
+        for (int side = 0; side < 4; side++) if ((sidesNeeded & 1 << side) != 0) {
+            waterSides[side] = new long[96]; lavaSides[side] = new long[96];
+        }
+        for (int sy = 0; sy < 24; sy++) {
+            Section section = chunk.sections[sy];
+            if (section == null || section.blocks == null || section.blocks.length == 0) continue;
+            byte[] fluid = new byte[section.blocks.length];
+            boolean hasFluid = false;
+            for (int i = 0; i < fluid.length; i++) {
+                fluid[i] = Extractor.fluid(section.blocks[i]);
+                hasFluid |= fluid[i] != 0;
+            }
+            if (!hasFluid) continue;
+            int width = Bits.width(fluid.length, 4);
+            for (int y = 0; y < 16 && sy * 16 + y - 64 <= maxY; y++) for (int side = 0; side < 4; side++) {
+                if ((sidesNeeded & 1 << side) == 0) continue;
+                for (int t = 0; t < 16; t++) {
+                    int x = side == WEST ? 0 : side == EAST ? 15 : t;
+                    int z = side == NORTH ? 0 : side == SOUTH ? 15 : t;
+                    int block = fluid.length == 1 ? 0 : Bits.get(section.blockData, width, y * 256 + z * 16 + x);
+                    int bit = (sy * 16 + y) * 16 + t;
+                    if (fluid[block] == 1) waterSides[side][bit >>> 6] |= 1L << (bit & 63);
+                    if (fluid[block] == 2) lavaSides[side][bit >>> 6] |= 1L << (bit & 63);
+                }
+            }
+        }
+        water[index] = waterSides; lava[index] = lavaSides;
+    }
+
     public void putAdjacent(int direction, int coordinate, Chunk chunk, boolean hideCaves, int maxY) {
         int index = 1024 + direction * 32 + coordinate;
         if (chunk == null || !"minecraft:full".equals(chunk.status)) {
@@ -121,5 +161,21 @@ public final class BorderCache {
         return (sides[opposite][bit >>> 6] & flag) != 0 ||
             (fluid == 1 && (water[neighbour][opposite][bit >>> 6] & flag) != 0) ||
             (fluid == 2 && (lava[neighbour][opposite][bit >>> 6] & flag) != 0);
+    }
+
+    public boolean neighbourSameFluid(int index, int direction, int y, int coordinate, byte fluid) {
+        if (fluid == 0) return false;
+        int neighbour = switch (direction) {
+            case WEST -> (index & 31) == 0 ? 1024 + WEST * 32 + (index >>> 5) : index - 1;
+            case EAST -> (index & 31) == 31 ? 1024 + EAST * 32 + (index >>> 5) : index + 1;
+            case NORTH -> index < 32 ? 1024 + NORTH * 32 + (index & 31) : index - 32;
+            case SOUTH -> index >= 992 ? 1024 + SOUTH * 32 + (index & 31) : index + 32;
+            default -> throw new IllegalArgumentException("Unknown border direction");
+        };
+        int opposite = direction ^ 1;
+        long[][][] type = fluid == 1 ? water : lava;
+        if (type[neighbour] == null) return false;
+        int bit = y * 16 + coordinate;
+        return (type[neighbour][opposite][bit >>> 6] & (1L << (bit & 63))) != 0;
     }
 }

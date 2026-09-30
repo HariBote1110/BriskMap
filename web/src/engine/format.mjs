@@ -9,7 +9,7 @@ function cursorFor(bytes, offset) {
 export function parseHeader(source, expectedKind) {
   const bytes=source instanceof Uint8Array?source:new Uint8Array(source);
   if(bytes.length<18) return {needed:18};
-  if(String.fromCharCode(...bytes.subarray(0,4))!=='BRSK'||bytes[4]!==5||![1,2].includes(bytes[5])||(expectedKind&&bytes[5]!==expectedKind)) throw formatError('Unknown or invalid BriskMap format');
+  if(String.fromCharCode(...bytes.subarray(0,4))!=='BRSK'||bytes[4]!==6||![1,2].includes(bytes[5])||(expectedKind&&bytes[5]!==expectedKind)||bytes[15]>16) throw formatError('Unknown or invalid BriskMap format');
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength),cursor=cursorFor(bytes,18),decoder=new TextDecoder('utf-8',{fatal:true});
   const strings=()=>{const count=cursor.varint();if(count>65535)throw formatError('Palette too large');const result=[];for(let i=0;i<count;i++){const length=cursor.varint();if(length>65536)throw formatError('Palette entry too large');if(cursor.offset+length>bytes.length)throw formatError('Truncated palette');result.push(decoder.decode(bytes.subarray(cursor.offset,cursor.offset+length)));cursor.offset+=length;}return result;};
   try {
@@ -17,7 +17,7 @@ export function parseHeader(source, expectedKind) {
     if(dataStart>bytes.length)return {needed:dataStart};
     const index=[];
     for(let i=0;i<1024;i++){const start=view.getUint32(cursor.offset+i*8,false),length=view.getUint32(cursor.offset+i*8+4,false);if((start===0)!==(length===0)||(length&&start<dataStart))throw formatError(`Invalid chunk index ${i}`);index.push({index:i,start,length});}
-    return {version:5,kind:bytes[5],x:view.getInt32(6,false),z:view.getInt32(10,false),flags:bytes[14],maxY:view.getInt16(16,false),palette,biomes,index,dataStart};
+    return {version:6,kind:bytes[5],x:view.getInt32(6,false),z:view.getInt32(10,false),flags:bytes[14],caveDepth:bytes[15],maxY:view.getInt16(16,false),palette,biomes,index,dataStart};
   } catch(error) { if(error.code==='format'&&/Truncated (varint|palette)/.test(error.message)) return {needed:bytes.length+65536}; throw error; }
 }
 export function decode2d(source,header) {

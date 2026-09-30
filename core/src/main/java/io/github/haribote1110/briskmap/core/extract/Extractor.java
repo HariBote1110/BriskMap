@@ -132,8 +132,12 @@ public final class Extractor {
     }
 
     public static Extracted3d extract3d(Chunk chunk, Palette palette, BorderCache borders, int index, boolean hideCaves, boolean surfaceFluids, int maxY) {
+        return extract3d(chunk, palette, borders, index, hideCaves, surfaceFluids, maxY, null);
+    }
+
+    public static Extracted3d extract3d(Chunk chunk, Palette palette, BorderCache borders, int index, boolean hideCaves, boolean surfaceFluids, int maxY, Reachability reach) {
         int[][] all = decodeBlocks(chunk, palette);
-        int[] floor = floors(chunk, maxY);
+        int[] floor = reach == null ? floors(chunk, maxY) : null;
         boolean[] occluding = new boolean[palette.size()];
         boolean[] air = new boolean[palette.size()];
         byte[] fluids = new byte[palette.size()];
@@ -155,12 +159,29 @@ public final class Extractor {
                 if (solidSingle && x > 0 && x < 15 && z > 0 && z < 15 && y > 0 && y < 15 && worldY != maxY) continue;
                 int fullY = sy * 16 + y;
                 byte currentFluid = surfaceFluids ? fluids[block] : 0;
-                boolean west = x == 0 ? borders.neighbourOccludes(index, BorderCache.WEST, fullY, z, currentFluid) : occludes(all[sy][p - 1], occluding, fluids, currentFluid, floor, x - 1, z, worldY, hideCaves);
-                boolean east = x == 15 ? borders.neighbourOccludes(index, BorderCache.EAST, fullY, z, currentFluid) : occludes(all[sy][p + 1], occluding, fluids, currentFluid, floor, x + 1, z, worldY, hideCaves);
-                boolean north = z == 0 ? borders.neighbourOccludes(index, BorderCache.NORTH, fullY, x, currentFluid) : occludes(all[sy][p - 16], occluding, fluids, currentFluid, floor, x, z - 1, worldY, hideCaves);
-                boolean south = z == 15 ? borders.neighbourOccludes(index, BorderCache.SOUTH, fullY, x, currentFluid) : occludes(all[sy][p + 16], occluding, fluids, currentFluid, floor, x, z + 1, worldY, hideCaves);
-                boolean below = fullY == 0 ? false : y == 0 ? occludes(all[sy - 1][p + 3840], occluding, fluids, currentFluid, floor, x, z, worldY - 1, hideCaves) : occludes(all[sy][p - 256], occluding, fluids, currentFluid, floor, x, z, worldY - 1, hideCaves);
-                boolean above = fullY == 383 || worldY == maxY ? false : y == 15 ? occludes(all[sy + 1][p - 3840], occluding, fluids, currentFluid, floor, x, z, worldY + 1, hideCaves) : occludes(all[sy][p + 256], occluding, fluids, currentFluid, floor, x, z, worldY + 1, hideCaves);
+                int cx = index & 31, cz = index >>> 5;
+                boolean west = reach != null ? !reach.reached(cx, cz, x - 1, z, fullY) || (x == 0
+                        ? borders.neighbourSameFluid(index, BorderCache.WEST, fullY, z, currentFluid)
+                        : currentFluid != 0 && fluids[all[sy][p - 1]] == currentFluid)
+                        : x == 0 ? borders.neighbourOccludes(index, BorderCache.WEST, fullY, z, currentFluid) : occludes(all[sy][p - 1], occluding, fluids, currentFluid, floor, x - 1, z, worldY, hideCaves);
+                boolean east = reach != null ? !reach.reached(cx, cz, x + 1, z, fullY) || (x == 15
+                        ? borders.neighbourSameFluid(index, BorderCache.EAST, fullY, z, currentFluid)
+                        : currentFluid != 0 && fluids[all[sy][p + 1]] == currentFluid)
+                        : x == 15 ? borders.neighbourOccludes(index, BorderCache.EAST, fullY, z, currentFluid) : occludes(all[sy][p + 1], occluding, fluids, currentFluid, floor, x + 1, z, worldY, hideCaves);
+                boolean north = reach != null ? !reach.reached(cx, cz, x, z - 1, fullY) || (z == 0
+                        ? borders.neighbourSameFluid(index, BorderCache.NORTH, fullY, x, currentFluid)
+                        : currentFluid != 0 && fluids[all[sy][p - 16]] == currentFluid)
+                        : z == 0 ? borders.neighbourOccludes(index, BorderCache.NORTH, fullY, x, currentFluid) : occludes(all[sy][p - 16], occluding, fluids, currentFluid, floor, x, z - 1, worldY, hideCaves);
+                boolean south = reach != null ? !reach.reached(cx, cz, x, z + 1, fullY) || (z == 15
+                        ? borders.neighbourSameFluid(index, BorderCache.SOUTH, fullY, x, currentFluid)
+                        : currentFluid != 0 && fluids[all[sy][p + 16]] == currentFluid)
+                        : z == 15 ? borders.neighbourOccludes(index, BorderCache.SOUTH, fullY, x, currentFluid) : occludes(all[sy][p + 16], occluding, fluids, currentFluid, floor, x, z + 1, worldY, hideCaves);
+                boolean below = fullY == 0 ? false : reach != null ? !reach.reached(cx, cz, x, z, fullY - 1)
+                        || currentFluid != 0 && fluids[y == 0 ? all[sy - 1][p + 3840] : all[sy][p - 256]] == currentFluid
+                        : y == 0 ? occludes(all[sy - 1][p + 3840], occluding, fluids, currentFluid, floor, x, z, worldY - 1, hideCaves) : occludes(all[sy][p - 256], occluding, fluids, currentFluid, floor, x, z, worldY - 1, hideCaves);
+                boolean above = fullY == 383 || worldY == maxY ? false : reach != null ? !reach.reached(cx, cz, x, z, fullY + 1)
+                        || currentFluid != 0 && fluids[y == 15 ? all[sy + 1][p - 3840] : all[sy][p + 256]] == currentFluid
+                        : y == 15 ? occludes(all[sy + 1][p - 3840], occluding, fluids, currentFluid, floor, x, z, worldY + 1, hideCaves) : occludes(all[sy][p + 256], occluding, fluids, currentFluid, floor, x, z, worldY + 1, hideCaves);
                 int mask = (west ? 0 : 1) | (east ? 0 : 2) | (below ? 0 : 4) | (above ? 0 : 8) | (north ? 0 : 16) | (south ? 0 : 32);
                 if (mask != 0) {
                     positions[count] = p; blocks[count] = block; masks[count] = (byte)mask; count++;

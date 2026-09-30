@@ -17,8 +17,8 @@ public final class Reader {
     private final byte[] bytes;
     private final int[] offsets = new int[1024], lengths = new int[1024];
     public final long[] timestamps = new long[1024];
-    public final long[] adjacentTimestamps = new long[128];
-    public final int flags, maxY;
+    public final long[] adjacentTimestamps = new long[132];
+    public final int flags, maxY, caveDepth;
     public final int version, kind, regionX, regionZ;
     public final List<String> blocks, biomes;
 
@@ -27,12 +27,13 @@ public final class Reader {
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes));
         if (in.readByte() != 'B' || in.readByte() != 'R' || in.readByte() != 'S' || in.readByte() != 'K') throw new IOException("Invalid magic");
         version = in.readUnsignedByte();
-        if (version != 5) throw new IOException("Unsupported format version " + version);
+        if (version != 6) throw new IOException("Unsupported format version " + version);
         kind = in.readUnsignedByte();
         if (kind != 1 && kind != 2) throw new IOException("Invalid kind");
         regionX = in.readInt(); regionZ = in.readInt();
         flags = in.readUnsignedByte();
-        if ((flags & ~7) != 0 || in.readUnsignedByte() != 0) throw new IOException("Invalid flags");
+        caveDepth = in.readUnsignedByte();
+        if ((flags & ~7) != 0 || caveDepth > 16) throw new IOException("Invalid flags or cave depth");
         maxY = in.readShort();
         blocks = table(in);
         biomes = kind == 1 ? table(in) : List.of();
@@ -41,16 +42,16 @@ public final class Reader {
             offsets[i] = in.readInt(); lengths[i] = in.readInt();
             if (offsets[i] == 0 && lengths[i] == 0) continue;
             if (offsets[i] != expectedOffset || lengths[i] <= 0
-                    || offsets[i] + (long) lengths[i] > bytes.length - 4612L)
+                    || offsets[i] + (long) lengths[i] > bytes.length - 4628L)
                 throw new IOException("Invalid chunk index");
             expectedOffset += lengths[i];
         }
-        if (expectedOffset != bytes.length - 4612) throw new IOException("Invalid payload length");
-        if (bytes.length < 4612 || bytes[bytes.length - 4] != 'B' || bytes[bytes.length - 3] != 'R'
+        if (expectedOffset != bytes.length - 4628) throw new IOException("Invalid payload length");
+        if (bytes.length < 4628 || bytes[bytes.length - 4] != 'B' || bytes[bytes.length - 3] != 'R'
                 || bytes[bytes.length - 2] != 'S' || bytes[bytes.length - 1] != 'T') throw new IOException("Invalid trailer");
-        DataInputStream trailer = new DataInputStream(new ByteArrayInputStream(bytes, bytes.length - 4612, 4608));
+        DataInputStream trailer = new DataInputStream(new ByteArrayInputStream(bytes, bytes.length - 4628, 4624));
         for (int i = 0; i < 1024; i++) timestamps[i] = Integer.toUnsignedLong(trailer.readInt());
-        for (int i = 0; i < 128; i++) adjacentTimestamps[i] = Integer.toUnsignedLong(trailer.readInt());
+        for (int i = 0; i < 132; i++) adjacentTimestamps[i] = Integer.toUnsignedLong(trailer.readInt());
     }
 
     public int chunkCount() { int count = 0; for (int length : lengths) if (length != 0) count++; return count; }

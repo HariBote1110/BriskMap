@@ -6,6 +6,7 @@ import io.github.haribote1110.briskmap.core.extract.Clock;
 import io.github.haribote1110.briskmap.core.extract.Extractor;
 import io.github.haribote1110.briskmap.core.extract.Extracted3d;
 import io.github.haribote1110.briskmap.core.extract.Palette;
+import io.github.haribote1110.briskmap.core.extract.Reachability;
 import io.github.haribote1110.briskmap.core.format.Format;
 import io.github.haribote1110.briskmap.core.format.Reader;
 import io.github.haribote1110.briskmap.core.region.Region;
@@ -38,22 +39,28 @@ public final class RegionExtractor {
         String name = mca.getFileName().toString();
         String[] parts = name.split("\\.");
         int regionX = Integer.parseInt(parts[1]), regionZ = Integer.parseInt(parts[2]);
-        Region[] adjacent = new Region[4];
-        int[] xOffset = {-1, 1, 0, 0}, zOffset = {0, 0, -1, 1};
-        for (int side = 0; side < 4; side++) {
+        Region[] adjacent = new Region[8];
+        int[] xOffset = {-1, 1, 0, 0, -1, 1, -1, 1}, zOffset = {0, 0, -1, 1, -1, -1, 1, 1};
+        for (int side = 0; side < 8; side++) {
             Path path = mca.resolveSibling("r." + (regionX + xOffset[side]) + "." + (regionZ + zOffset[side]) + ".mca");
             if (Files.isRegularFile(path)) adjacent[side] = new Region(path);
         }
-        long[] adjacentTimes = new long[128];
+        long[] adjacentTimes = new long[132];
         for (int side = 0; side < 4; side++) for (int coordinate = 0; coordinate < 32; coordinate++) {
             Region neighbour = adjacent[side];
             int index = adjacentIndex(side, coordinate);
             adjacentTimes[side * 32 + coordinate] = neighbour != null && neighbour.present(index) ? neighbour.timestamp(index) : 0;
         }
+        int[] cornerIndex = {1023, 992, 31, 0};
+        for (int corner = 0; corner < 4; corner++) {
+            Region neighbour = adjacent[corner + 4];
+            adjacentTimes[128 + corner] = neighbour != null && neighbour.present(cornerIndex[corner])
+                    ? neighbour.timestamp(cornerIndex[corner]) : 0;
+        }
         Path twoPath = outDir.resolve(name.replace(".mca", ".b2d"));
         Path threePath = outDir.resolve(name.replace(".mca", ".b3d"));
-        Reader oldTwo = options.do2d() && incremental ? valid(twoPath, 1, regionX, regionZ, options.flags(), options.headerMaxY()) : null;
-        Reader oldThree = options.do3d() && incremental ? valid(threePath, 2, regionX, regionZ, options.flags(), options.headerMaxY()) : null;
+        Reader oldTwo = options.do2d() && incremental ? valid(twoPath, 1, regionX, regionZ, options.flags(), options.headerMaxY(), options.caveDepth()) : null;
+        Reader oldThree = options.do3d() && incremental ? valid(threePath, 2, regionX, regionZ, options.flags(), options.headerMaxY(), options.caveDepth()) : null;
         if (oldTwo != null && oldThree != null && !oldTwo.blocks.equals(oldThree.blocks)) oldThree = null;
         boolean[] changedTwo = new boolean[1024], changedThree = new boolean[1024];
         long[] currentTimes = new long[1024];
@@ -63,18 +70,34 @@ public final class RegionExtractor {
             changedThree[i] = options.do3d() && (oldThree == null || currentTimes[i] != oldThree.timestamps[i]);
         }
         boolean[] affectedThree = Arrays.copyOf(changedThree, 1024);
+        boolean bounded = options.hideCaves() && options.caveDepth() > 0;
         if (oldThree != null) for (int side = 0; side < 4; side++) for (int coordinate = 0; coordinate < 32; coordinate++) {
             int at = side * 32 + coordinate;
-            if (adjacentTimes[at] != oldThree.adjacentTimestamps[at]) affectedThree[ownIndex(side, coordinate)] = true;
+            if (adjacentTimes[at] != oldThree.adjacentTimestamps[at]) {
+                int own = ownIndex(side, coordinate);
+                affectedThree[own] = true;
+                if (bounded && side < 2) {
+                    if (coordinate > 0) affectedThree[own - 32] = true;
+                    if (coordinate < 31) affectedThree[own + 32] = true;
+                } else if (bounded) {
+                    if (coordinate > 0) affectedThree[own - 1] = true;
+                    if (coordinate < 31) affectedThree[own + 1] = true;
+                }
+            }
         }
+        if (bounded && oldThree != null) for (int corner = 0; corner < 4; corner++)
+            if (adjacentTimes[128 + corner] != oldThree.adjacentTimestamps[128 + corner])
+                affectedThree[new int[]{0, 31, 992, 1023}[corner]] = true;
         for (int i = 0; i < 1024; i++) if (changedThree[i]) {
-            if ((i & 31) > 0) affectedThree[i - 1] = true;
-            if ((i & 31) < 31) affectedThree[i + 1] = true;
-            if (i >= 32) affectedThree[i - 32] = true;
-            if (i < 992) affectedThree[i + 32] = true;
+            for (int dz = -1; dz <= 1; dz++) for (int dx = -1; dx <= 1; dx++) {
+                if (!bounded && dx != 0 && dz != 0) continue;
+                int x = (i & 31) + dx, z = (i >>> 5) + dz;
+                if (x >= 0 && x < 32 && z >= 0 && z < 32) affectedThree[z * 32 + x] = true;
+            }
         }
         boolean writeTwo = options.do2d() && (any(changedTwo) || oldTwo != null && !Arrays.equals(adjacentTimes, oldTwo.adjacentTimestamps));
-        boolean writeThree = options.do3d() && any(affectedThree);
+        boolean writeThree = options.do3d() && (any(affectedThree)
+                || oldThree != null && !Arrays.equals(adjacentTimes, oldThree.adjacentTimestamps));
         if (!writeTwo && !writeThree) return new RegionResult(0, 0, 0, 0,
                 Math.max(oldTwo == null ? 0 : oldTwo.chunkCount(), oldThree == null ? 0 : oldThree.chunkCount()),
                 options.do2d() ? Files.size(twoPath) : 0, options.do3d() ? Files.size(threePath) : 0,
@@ -88,22 +111,44 @@ public final class RegionExtractor {
         if (oldTwo != null) for (int i = 0; i < 1024; i++) two[i] = oldTwo.compressed(i);
         if (oldThree != null) for (int i = 0; i < 1024; i++) three[i] = oldThree.compressed(i);
         BorderCache borders = null;
+        Reachability reach = null;
         Inflater inflater = INFLATER.get();
         long borderNs = 0;
-        if (writeThree) {
+        if (any(affectedThree)) {
             tick = Clock.now();
             borders = new BorderCache();
+            if (options.hideCaves() && options.caveDepth() > 0) reach = new Reachability(options.maxY());
             Palette borderPalette = new Palette();
             for (int i = 0; i < 1024; i++) {
-                try { borders.put(i, region.read(i, inflater, options.blockDefaults()), borderPalette, options.hideCaves(), options.maxY()); }
+                try {
+                    Chunk candidate = region.read(i, inflater, options.blockDefaults());
+                    if (reach == null) borders.put(i, candidate, borderPalette, options.hideCaves(), options.maxY());
+                    else borders.putFluids(i, candidate, options.maxY());
+                    if (reach != null) reach.put(i & 31, i >>> 5, candidate);
+                }
                 catch (Region.UnsupportedChunkException ignored) { /* Counted during extraction. */ }
             }
             for (int side = 0; side < 4; side++) for (int coordinate = 0; coordinate < 32; coordinate++) {
                 Region neighbour = adjacent[side];
                 if (neighbour == null) continue;
-                try { borders.putAdjacent(side, coordinate, neighbour.read(adjacentIndex(side, coordinate), inflater, options.blockDefaults()),
-                        options.hideCaves(), options.maxY()); }
+                try {
+                    Chunk candidate = neighbour.read(adjacentIndex(side, coordinate), inflater, options.blockDefaults());
+                    if (reach == null) borders.putAdjacent(side, coordinate, candidate, options.hideCaves(), options.maxY());
+                    else borders.putAdjacentFluids(side, coordinate, candidate, options.maxY());
+                    if (reach != null) reach.put(side == 0 ? -1 : side == 1 ? 32 : coordinate,
+                            side == 2 ? -1 : side == 3 ? 32 : coordinate, candidate);
+                }
                 catch (Region.UnsupportedChunkException ignored) { /* An unsupported neighbour is open space. */ }
+            }
+            if (reach != null) {
+                for (int corner = 0; corner < 4; corner++) {
+                    Region neighbour = adjacent[corner + 4];
+                    if (neighbour == null) continue;
+                    try { reach.put(corner % 2 == 0 ? -1 : 32, corner < 2 ? -1 : 32,
+                            neighbour.read(cornerIndex[corner], inflater, options.blockDefaults())); }
+                    catch (Region.UnsupportedChunkException ignored) { /* An unsupported neighbour is open space. */ }
+                }
+                reach.flood(options.caveDepth());
             }
             borderNs = Clock.now() - tick;
         }
@@ -151,7 +196,7 @@ public final class RegionExtractor {
             if (affectedThree[i]) {
                 tick = Clock.now();
                 Extracted3d shell = Extractor.extract3d(chunk, blocks, borders, i,
-                        options.hideCaves(), options.surfaceFluids(), options.maxY());
+                        options.hideCaves(), options.surfaceFluids(), options.maxY(), reach);
                 byte[] payload = Format.encode3d(shell);
                 extract3dNs += Clock.now() - tick;
                 shellBlocks += shell.count(); blocksNonair += shell.nonair;
@@ -162,8 +207,8 @@ public final class RegionExtractor {
             }
         }
         tick = Clock.now();
-        Format.WriteResult twoResult = writeTwo ? Format.writeV5IfChanged(twoPath, 1, regionX, regionZ, options.flags(), options.headerMaxY(), blocks, biomes, two, currentTimes, adjacentTimes) : null;
-        Format.WriteResult threeResult = writeThree ? Format.writeV5IfChanged(threePath, 2, regionX, regionZ, options.flags(), options.headerMaxY(), blocks, null, three, currentTimes, adjacentTimes) : null;
+        Format.WriteResult twoResult = writeTwo ? Format.writeV6IfChanged(twoPath, 1, regionX, regionZ, options.flags(), options.caveDepth(), options.headerMaxY(), blocks, biomes, two, currentTimes, adjacentTimes) : null;
+        Format.WriteResult threeResult = writeThree ? Format.writeV6IfChanged(threePath, 2, regionX, regionZ, options.flags(), options.caveDepth(), options.headerMaxY(), blocks, null, three, currentTimes, adjacentTimes) : null;
         long twoBytes = options.do2d() ? writeTwo ? twoResult.bytes() : Files.size(twoPath) : 0;
         long threeBytes = options.do3d() ? writeThree ? threeResult.bytes() : Files.size(threePath) : 0;
         int outputFiles = (twoResult != null && twoResult.written() ? 1 : 0)
@@ -176,10 +221,10 @@ public final class RegionExtractor {
                 shellBlocks, blocksNonair, shellFluidBlocks, faces);
     }
 
-    private static Reader valid(Path path, int kind, int x, int z, int flags, int maxY) {
+    private static Reader valid(Path path, int kind, int x, int z, int flags, int maxY, int caveDepth) {
         try {
             Reader reader = new Reader(path);
-            return reader.kind == kind && reader.regionX == x && reader.regionZ == z && reader.flags == flags && reader.maxY == maxY ? reader : null;
+            return reader.kind == kind && reader.regionX == x && reader.regionZ == z && reader.flags == flags && reader.maxY == maxY && reader.caveDepth == caveDepth ? reader : null;
         } catch (IOException ex) { return null; }
     }
 

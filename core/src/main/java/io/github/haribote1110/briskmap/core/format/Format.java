@@ -77,26 +77,27 @@ public final class Format {
         return packed.toByteArray();
     }
 
-    public static long writeV5(Path path, int kind, int regionX, int regionZ, int flags, int maxY,
+    public static long writeV6(Path path, int kind, int regionX, int regionZ, int flags, int caveDepth, int maxY,
             Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps, long[] adjacentTimestamps) throws IOException {
-        return writeV5(path, kind, regionX, regionZ, flags, maxY, blocks, biomes, compressed, timestamps, adjacentTimestamps, false).bytes();
+        return writeV6(path, kind, regionX, regionZ, flags, caveDepth, maxY, blocks, biomes, compressed, timestamps, adjacentTimestamps, false).bytes();
     }
 
     public record WriteResult(long bytes, boolean written) { }
 
-    public static WriteResult writeV5IfChanged(Path path, int kind, int regionX, int regionZ, int flags, int maxY,
+    public static WriteResult writeV6IfChanged(Path path, int kind, int regionX, int regionZ, int flags, int caveDepth, int maxY,
             Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps, long[] adjacentTimestamps) throws IOException {
-        return writeV5(path, kind, regionX, regionZ, flags, maxY, blocks, biomes, compressed, timestamps, adjacentTimestamps, true);
+        return writeV6(path, kind, regionX, regionZ, flags, caveDepth, maxY, blocks, biomes, compressed, timestamps, adjacentTimestamps, true);
     }
 
-    private static WriteResult writeV5(Path path, int kind, int regionX, int regionZ, int flags, int maxY,
+    private static WriteResult writeV6(Path path, int kind, int regionX, int regionZ, int flags, int caveDepth, int maxY,
             Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps, long[] adjacentTimestamps, boolean skipIdentical) throws IOException {
-        if (timestamps.length != 1024 || adjacentTimestamps.length != 128) throw new IllegalArgumentException("Invalid timestamp count");
+        if (timestamps.length != 1024 || adjacentTimestamps.length != 132 || caveDepth < 0 || caveDepth > 16)
+            throw new IllegalArgumentException("Invalid format data");
         ByteArrayOutputStream header = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(header);
         out.write(new byte[]{'B', 'R', 'S', 'K'});
-        out.writeByte(5); out.writeByte(kind); out.writeInt(regionX); out.writeInt(regionZ);
-        out.writeByte(flags); out.writeByte(0); out.writeShort(maxY);
+        out.writeByte(6); out.writeByte(kind); out.writeInt(regionX); out.writeInt(regionZ);
+        out.writeByte(flags); out.writeByte(caveDepth); out.writeShort(maxY);
         table(out, blocks);
         if (kind == 1) table(out, biomes);
         int cursor = header.size() + 8192;

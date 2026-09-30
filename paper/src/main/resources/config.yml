@@ -6,6 +6,7 @@ web:
 extract:
   threads: 0 # 0 uses half of the available processors, at least one.
   caves: "hide"
+  cave-depth: 16
   fluids: "surface"
   compression-level: 6
   scan-interval-seconds: 30
