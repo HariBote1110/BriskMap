@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createViewer } from '../../src/engine/index.mjs';
+import { createViewer, loadIndex, prewarm } from '../../src/engine/index.mjs';
 
 const maps = [
   {id:'first',spawn:{x:12,y:70,z:34},regions:[]},
   {id:'second',spawn:{x:300,y:81,z:-200},regions:[]},
 ];
 
-async function withViewer(run,{mode='3d',regions=[],fetcher=async()=>new Response('',{status:404}),onStatus,WorkerClass}={}) {
+async function withViewer(run,{mode='3d',regions=[],fetcher=async()=>new Response('',{status:404}),onStatus,WorkerClass,prewarmBeforeViewer=false}={}) {
   const keys=['window','location','navigator','ResizeObserver','matchMedia','devicePixelRatio','requestAnimationFrame','Worker','fetch'];
   const previous=new Map(keys.map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
   const gl=new Proxy({}, {get(_target,key){if(key==='getShaderParameter'||key==='getProgramParameter')return()=>true;if(typeof key==='string'&&/^[A-Z][A-Z0-9_]*$/.test(key))return 1;return()=>({});}});
@@ -27,7 +27,9 @@ async function withViewer(run,{mode='3d',regions=[],fetcher=async()=>new Respons
   const errors=[];
   let viewer;
   try{
+    const warm=prewarmBeforeViewer?prewarm():null;
     viewer=await createViewer(canvas,{index:{format:1,etag:'"old"',textures:null,maps:[{...maps[0],regions},maps[1]]},mapId:'first',mode,onStatus,onError:error=>errors.push(error)});
+    if(warm)assert.equal(viewer.pool,warm);
     await run(viewer,errors);
   }finally{
     viewer?.dispose();
@@ -88,6 +90,7 @@ test('status and bench counters agree for present, empty and absent 3D data',asy
   const events=[];
   let meshes=0;
   class MeshWorker {
+    constructor(){setImmediate(()=>this.onmessage?.({data:{type:'ready'}}));}
     postMessage(message){
       if(message.type==='mesh'){
         meshes++;
@@ -110,7 +113,32 @@ test('status and bench counters agree for present, empty and absent 3D data',asy
     assert.ok(viewer.status.regionsTotal>1);
     assert.ok(window.__briskStats.requests>0);
     assert.equal(meshes,1);
+    const stats=window.__briskStats;
+    for(const field of ['t_index_done_ms','t_viewer_created_ms','t_workers_spawned_ms','t_first_worker_ready_ms','t_all_workers_ready_ms','t_first_chunk_meshed_ms','worker_mesh_ms_total','worker_inflate_ms_total','worker_idle_gaps','main_upload_ms_total','draws_during_load','draw_ms_during_load','workers'])assert.ok(Object.hasOwn(stats,field),field);
+    assert.ok(stats.t_workers_spawned_ms<=stats.t_viewer_created_ms);
+    assert.ok(stats.t_first_worker_ready_ms<=stats.t_all_workers_ready_ms);
+    assert.ok(stats.t_all_workers_ready_ms<=stats.t_first_chunk_meshed_ms);
+    assert.ok(stats.t_viewer_created_ms<=stats.t_first_chunk_meshed_ms);
+    assert.ok(stats.t_first_chunk_meshed_ms<=stats.t_upload_done_ms);
+    assert.ok(stats.main_upload_ms_total>=0);
+    assert.ok(stats.draws_during_load>0);
+    assert.ok(stats.workers>=1);
   },{regions:[[0,0]],WorkerClass:MeshWorker,fetcher:async()=>new Response(data),onStatus:status=>events.push({status,selected:window.__briskStats.chunks_selected,loaded:window.__briskStats.chunks_loaded})});
+});
+
+test('index completion precedes viewer construction in load statistics',async()=>{
+  await loadIndex('./',{fetcher:async()=>new Response(JSON.stringify({format:1,maps:[]}))});
+  await withViewer(async()=>{
+    const stats=window.__briskStats;
+    assert.ok(stats.t_index_done_ms<=stats.t_viewer_created_ms);
+  });
+});
+
+test('createViewer reuses workers started before the index has loaded',async()=>{
+  await withViewer(async viewer=>{
+    assert.equal(viewer.pool.workers.length,2);
+    assert.ok(window.__briskStats.t_workers_spawned_ms<=window.__briskStats.t_viewer_created_ms);
+  },{prewarmBeforeViewer:true});
 });
 
 test('2D region progress advances when its header is fetched',async()=>{
@@ -152,6 +180,7 @@ test('setMode and setMap replace benchmark stats and reset readiness for each lo
     const switchingMode=viewer.setMode('2d');
     const second=window.__briskStats;
     assert.notEqual(second,initial);
+    assert.equal(second.t_viewer_created_ms,initial.t_viewer_created_ms);
     assert.equal(second.mode,'2d');
     assert.equal(second.requests,0);
     assert.equal(window.__briskReady,false);

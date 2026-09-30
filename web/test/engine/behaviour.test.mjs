@@ -74,6 +74,16 @@ test('viewer rejects unavailable WebGL2 with the public error code', async () =>
   await assert.rejects(createViewer({getContext:()=>null},{}),error=>error.code==='webgl2');
 });
 
+test('worker startup errors retain the fatal viewer error contract', async () => {
+  const previous=globalThis.Worker;
+  delete globalThis.Worker;
+  const errors=[];
+  try {
+    await assert.rejects(createViewer({getContext:()=>({})},{onError:error=>errors.push(error)}),error=>error.code==='render'&&error.fatal);
+    assert.equal(errors.length,1);
+  } finally {globalThis.Worker=previous;}
+});
+
 test('real 2D raster pixels agree with an independent material and height reference', async () => {
   const table = JSON.parse(await readFile(new URL('blocks.json', textureRoot), 'utf8'));
   const png = await readFile(new URL('atlas.png', textureRoot));
