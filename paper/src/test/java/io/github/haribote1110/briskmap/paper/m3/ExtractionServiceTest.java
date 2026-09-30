@@ -23,6 +23,25 @@ import static org.junit.jupiter.api.Assertions.*;
 class ExtractionServiceTest {
     @TempDir Path temp;
 
+    @Test void passesEachWorldCutToTheExtractor() throws Exception {
+        Path first = Files.createDirectories(temp.resolve("first/region"));
+        Path second = Files.createDirectories(temp.resolve("second/region"));
+        Files.write(first.resolve("r.0.0.mca"), new byte[]{1});
+        Files.write(second.resolve("r.0.0.mca"), new byte[]{1});
+        java.util.Set<Integer> cuts = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        try (ExtractionService service = new ExtractionService(2, 3600,
+                new ExtractOptions(true, true, 6, true, true), Logger.getLogger("test"), () -> { },
+                (input, output, options) -> { cuts.add(options.maxY()); return null; })) {
+            service.add(new MapTarget("nether", "nether", "minecraft:the_nether", first,
+                    temp.resolve("out-nether"), new int[]{0, 64, 0}, 100));
+            service.add(new MapTarget("normal", "normal", "minecraft:overworld", second,
+                    temp.resolve("out-normal"), new int[]{0, 64, 0}));
+            service.scanNow(null);
+            assertTrue(service.awaitIdle(10, TimeUnit.SECONDS));
+            assertEquals(java.util.Set.of(100, Integer.MAX_VALUE), cuts);
+        }
+    }
+
     @Test void extractsAndSkipsUnchangedInput() throws Exception {
         Path fixture = Path.of("../feasibility_research/fixtures/r.0.0.mca");
         Assumptions.assumeTrue(Files.exists(fixture));

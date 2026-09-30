@@ -62,16 +62,17 @@ class FeatureTest {
                 Assumptions.assumeTrue(Files.isRegularFile(oldPath), "Oracle file is absent: " + oldPath);
                 byte[] old = Files.readAllBytes(oldPath), current = Files.readAllBytes(out.resolve(base + "." + extension));
                 assertArrayEquals(Arrays.copyOfRange(old, 0, 4), Arrays.copyOfRange(current, 0, 4));
-                assertEquals(extension.equals("b2d") ? 1 : 2, old[4]); assertEquals(3, current[4]);
+                assertEquals(extension.equals("b2d") ? 1 : 2, old[4]); assertEquals(4, current[4]);
                 assertArrayEquals(Arrays.copyOfRange(old, 5, 14), Arrays.copyOfRange(current, 5, 14));
                 assertEquals((hide ? 1 : 0) | (surface ? 2 : 0), current[14]); assertEquals(0, current[15]);
+                assertEquals(127, current[16]); assertEquals(-1, current[17]);
                 int oldTable = tableEnd(old, tableEnd(old, 14));
-                int newTable = tableEnd(current, tableEnd(current, 16));
-                if (extension.equals("b3d")) { oldTable = tableEnd(old, 14); newTable = tableEnd(current, 16); }
-                assertArrayEquals(Arrays.copyOfRange(old, 14, oldTable), Arrays.copyOfRange(current, 16, newTable), flavour + " " + base + "." + extension);
+                int newTable = tableEnd(current, tableEnd(current, 18));
+                if (extension.equals("b3d")) { oldTable = tableEnd(old, 14); newTable = tableEnd(current, 18); }
+                assertArrayEquals(Arrays.copyOfRange(old, 14, oldTable), Arrays.copyOfRange(current, 18, newTable), flavour + " " + base + "." + extension);
                 for (int i = 0; i < 1024; i++) {
                     int oldOffset = integer(old, oldTable + i * 8), newOffset = integer(current, newTable + i * 8);
-                    assertEquals(oldOffset == 0 ? 0 : oldOffset + 2, newOffset);
+                    assertEquals(oldOffset == 0 ? 0 : oldOffset + 4, newOffset);
                     assertEquals(integer(old, oldTable + i * 8 + 4), integer(current, newTable + i * 8 + 4));
                 }
                 assertArrayEquals(Arrays.copyOfRange(old, oldTable + 8192, old.length),

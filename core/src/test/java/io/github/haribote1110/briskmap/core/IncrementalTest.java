@@ -87,11 +87,11 @@ class IncrementalTest {
         timestamps[0] = 7;
         Palette blocks = new Palette();
         blocks.index("minecraft:stone");
-        assertTrue(Format.writeV3IfChanged(file, 2, 0, 0, 0, blocks, null, payloads, timestamps).written());
+        assertTrue(Format.writeV4IfChanged(file, 2, 0, 0, 0, Short.MAX_VALUE, blocks, null, payloads, timestamps).written());
         byte[] before = Files.readAllBytes(file);
         FileTime fixedTime = FileTime.fromMillis(1_700_000_000_000L);
         Files.setLastModifiedTime(file, fixedTime);
-        Format.WriteResult unchanged = Format.writeV3IfChanged(file, 2, 0, 0, 0, blocks, null, payloads, timestamps);
+        Format.WriteResult unchanged = Format.writeV4IfChanged(file, 2, 0, 0, 0, Short.MAX_VALUE, blocks, null, payloads, timestamps);
         assertFalse(unchanged.written());
         assertEquals(before.length, unchanged.bytes());
         assertArrayEquals(before, Files.readAllBytes(file));
@@ -144,12 +144,29 @@ class IncrementalTest {
         assertTrue(RegionExtractor.update(input, out, changed).written());
         assertEquals(0, new Reader(out.resolve("r.0.0.b3d")).flags);
         Path file = out.resolve("r.0.0.b2d");
-        byte[] damaged = Files.readAllBytes(file); damaged[4] = 2; Files.write(file, damaged);
+        byte[] damaged = Files.readAllBytes(file); damaged[4] = 3; Files.write(file, damaged);
+        assertThrows(java.io.IOException.class, () -> new Reader(file));
         assertTrue(RegionExtractor.update(input, out, changed).written());
-        assertEquals(3, new Reader(file).version);
+        assertEquals(4, new Reader(file).version);
         damaged = Files.readAllBytes(file); damaged[damaged.length - 1] = 0; Files.write(file, damaged);
         assertTrue(RegionExtractor.update(input, out, changed).written());
         assertEquals(1, new Reader(file).chunkCount());
+    }
+
+    @Test void heightCutChangeForcesFullExtraction() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "height-cut-");
+        Path input = dir.resolve("r.0.0.mca"), out = dir.resolve("out");
+        byte[][] chunks = new byte[1024][]; int[] stamps = new int[1024];
+        chunks[0] = chunk("minecraft:full", "minecraft:stone", false); stamps[0] = 42;
+        writeRegion(input, chunks, stamps);
+        ExtractOptions cut = OPTIONS.withMaxY(100);
+        assertTrue(RegionExtractor.extract(input, out, cut).written());
+        assertEquals(100, new Reader(out.resolve("r.0.0.b2d")).maxY);
+        assertEquals(100, new Reader(out.resolve("r.0.0.b3d")).maxY);
+        assertFalse(RegionExtractor.update(input, out, cut).written());
+        assertTrue(RegionExtractor.update(input, out, cut.withMaxY(90)).written());
+        assertEquals(90, new Reader(out.resolve("r.0.0.b2d")).maxY);
+        assertEquals(90, new Reader(out.resolve("r.0.0.b3d")).maxY);
     }
 
     @Test void blockDefaultsFlagForcesFullExtractionWhenItChanges() throws Exception {

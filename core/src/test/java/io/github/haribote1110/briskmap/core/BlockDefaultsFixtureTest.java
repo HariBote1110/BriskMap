@@ -90,6 +90,31 @@ class BlockDefaultsFixtureTest {
         }
     }
 
+    @Test void netherCutLeavesVisibleTerrainBelowRoof() throws Exception {
+        Path input = Path.of("feasibility_research/fixtures/26.3/nether/r.0.0.mca");
+        assume(input);
+        Path out = Files.createTempDirectory(Path.of("core/build"), "nether-cut-");
+        RegionResult result = RegionExtractor.extract(input, out,
+                new ExtractOptions(true, true, 6, true, true).withMaxY(100));
+        Reader shell = new Reader(out.resolve("r.0.0.b3d"));
+        Reader surface = new Reader(out.resolve("r.0.0.b2d"));
+        int upperFaces = 0;
+        for (int chunk = 0; chunk < 1024; chunk++) {
+            var three = shell.read3d(chunk);
+            if (three != null) for (int sy = 0; sy < 24; sy++)
+                for (int index = 0; index < three.positions[sy].length; index++) {
+                    int y = sy * 16 + (three.positions[sy][index] >>> 8) - 64;
+                    assertTrue(y <= 100, "Shell block above cut: " + y);
+                    if ((three.masks[sy][index] & 8) != 0) upperFaces++;
+                }
+            var two = surface.read2d(chunk);
+            if (two != null) for (short y : two.y) assertTrue(y <= 100);
+        }
+        assertTrue(upperFaces > 0, "No shell blocks visible from above");
+        System.out.println("Nether maxY=100 shell=" + result.shellBlocks() + " topFaces=" + upperFaces
+                + " bytes2d=" + result.outputBytes2d() + " bytes3d=" + result.outputBytes3d());
+    }
+
     private static TreeSet<String> outputStates(List<Path> regions, ExtractOptions options, String prefix) throws IOException {
         Path out = Files.createTempDirectory(Path.of("core/build"), "fixture-" + prefix);
         TreeSet<String> states = new TreeSet<>();

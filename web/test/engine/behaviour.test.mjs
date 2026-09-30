@@ -12,6 +12,16 @@ import { createViewer } from '../../src/engine/index.mjs';
 
 const root = new URL('../fixtures-out/overworld/', import.meta.url);
 const textureRoot = new URL('../../../feasibility_research/output/textures/26.3/', import.meta.url);
+function asV4(old) {
+  const data=Buffer.alloc(old.length+2);
+  old.copy(data,0,0,16);data[4]=4;data.writeInt16BE(32767,16);old.copy(data,18,16);
+  let at=16;
+  const varint=()=>{let value=0,shift=0,byte;do{byte=old[at++];value+=(byte&127)*2**shift;shift+=7;}while(byte&128);return value;};
+  const table=()=>{const count=varint();for(let i=0;i<count;i++){const length=varint();at+=length;}};
+  table();if(old[5]===1)table();
+  for(let i=0;i<1024;i++){const offset=old.readUInt32BE(at+i*8);if(offset)data.writeUInt32BE(offset+2,at+2+i*8);}
+  return data;
+}
 const tint = [[255,255,255],[145,189,89],[119,171,47],[63,118,228],[255,255,255]];
 
 test('flat materials assign one FNV colour per block name', () => {
@@ -77,7 +87,7 @@ test('real 2D raster pixels agree with an independent material and height refere
     let predictor=0;if(filter===1)predictor=left;else if(filter===2)predictor=up;else if(filter===3)predictor=Math.floor((left+up)/2);else if(filter===4){const p=left+up-upperLeft,a=Math.abs(p-left),b=Math.abs(p-up),c=Math.abs(p-upperLeft);predictor=a<=b&&a<=c?left:b<=c?up:upperLeft;}
     pixels[offset]=(raw+predictor)&255;
   }
-  const means=meanLayers(pixels,table.layers),data=await readFile(new URL('r.0.0.b2d',root)),header=parseHeader(data,1);
+  const means=meanLayers(pixels,table.layers),data=asV4(await readFile(new URL('r.0.0.b2d',root))),header=parseHeader(data,1);
   const chunks=header.index.filter(e=>e.length).map(entry=>({index:entry.index,columns:decode2d(inflateRawSync(data.subarray(entry.start,entry.start+entry.length)),header)}));
   const colours=regionColours(header.palette,table,means),raster=rasteriseRegion(chunks,header,table,means);
   assert.equal(colours.length,header.palette.length*3);
@@ -116,7 +126,7 @@ test('real 2D raster pixels agree with an independent material and height refere
 });
 
 test('north edge shading uses the southern edge of the adjacent real region', async () => {
-  const [current,north]=await Promise.all(['r.0.0.b2d','r.0.-1.b2d'].map(name=>readFile(new URL(name,root))));
+  const [current,north]=await Promise.all(['r.0.0.b2d','r.0.-1.b2d'].map(async name=>asV4(await readFile(new URL(name,root)))));
   const currentHeader=parseHeader(current,1),northHeader=parseHeader(north,1);
   const currentY=new Int16Array(512).fill(-32768),northY=new Int16Array(512).fill(-32768),blocks=new Uint32Array(512),water=new Uint8Array(512);
   for(let cx=0;cx<32;cx++){

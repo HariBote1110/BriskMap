@@ -54,12 +54,40 @@ class ModelsBuilderTest {
             assertTrue(Files.isRegularFile(oracle.resolve("blocks.json")), "Missing JSON oracle: " + oracle);
             assertTrue(Files.isRegularFile(oracle.resolve("atlas.png")), "Missing PNG oracle: " + oracle);
             Path out = temporary.resolve(version); TextureBuilder.Summary summary = TextureBuilder.build(jar, out);
-            assertArrayEquals(Files.readAllBytes(oracle.resolve("blocks.json")), Files.readAllBytes(out.resolve("blocks.json")), version);
+            Map<String,Object> oldDocument = Json.object(Json.parse(Files.readString(oracle.resolve("blocks.json"))));
+            Map<String,Object> newDocument = Json.object(Json.parse(Files.readString(out.resolve("blocks.json"))));
+            Map<String,Object> oldBlocks = Json.object(oldDocument.get("blocks"));
+            Map<String,Object> newBlocks = Json.object(newDocument.get("blocks"));
+            assertEquals(oldBlocks.keySet(), newBlocks.keySet(), version);
+            for (String block : oldBlocks.keySet()) {
+                var previous = entries(oldBlocks, block);
+                var current = entries(newBlocks, block);
+                assertEquals(previous.size(), current.size(), block);
+                for (int index = 0; index < previous.size(); index++) {
+                    Map<String,Object> expected = new HashMap<>(previous.get(index));
+                    if ("cross".equals(current.get(index).get("shape"))) {
+                        expected.put("shape", "cross");
+                        expected.put("faces", java.util.Collections.nCopies(6, ((java.util.List<?>) expected.get("faces")).get(4)));
+                        expected.put("tints", java.util.Collections.nCopies(6, ((java.util.List<?>) expected.get("tints")).get(4)));
+                    }
+                    assertEquals(expected, current.get(index), block + " entry " + index);
+                }
+            }
+            oldDocument.put("blocks", newBlocks);
+            assertEquals(oldDocument, newDocument, version);
             Png.Image expected = Png.decode(Files.readAllBytes(oracle.resolve("atlas.png")));
             Png.Image actual = Png.decode(Files.readAllBytes(out.resolve("atlas.png")));
             assertEquals(expected.width(), actual.width()); assertEquals(expected.height(), actual.height()); assertArrayEquals(expected.pixels(), actual.pixels(), version);
             Map<String,Object> document = Json.object(Json.parse(Files.readString(out.resolve("blocks.json"))));
             Map<String,Object> blocks = Json.object(document.get("blocks"));
+            for (String name : new String[] {"short_grass", "poppy", "oak_sapling"})
+                assertEquals("cross", entry(blocks, "minecraft:" + name, 0).get("shape"), version + " " + name);
+            assertEquals("cross", entries(blocks, "minecraft:wheat").stream()
+                    .filter(e -> "7".equals(Json.object(e.get("when")).get("age"))).findFirst().orElseThrow().get("shape"));
+            assertEquals("cross", entries(blocks, "minecraft:tall_grass").stream()
+                    .filter(e -> "upper".equals(Json.object(e.get("when")).get("half"))).findFirst().orElseThrow().get("shape"));
+            for (String name : new String[] {"flower_pot", "potted_poppy"})
+                assertNull(entry(blocks, "minecraft:" + name, 0).get("shape"), version + " " + name);
             Map<String,Object> stone = entry(blocks,"minecraft:stone",0);
             assertEquals(true, stone.get("fullCube")); assertEquals(false, stone.get("transparent"));
             Map<String,Object> leaves = entry(blocks,"minecraft:oak_leaves",0);

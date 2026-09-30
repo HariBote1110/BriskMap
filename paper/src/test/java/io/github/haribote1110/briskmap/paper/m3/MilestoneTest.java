@@ -33,6 +33,27 @@ class MilestoneTest {
         assertEquals(1, warnings.get());
     }
 
+    @Test void perWorldHeightCuts() {
+        var nether = RegionFolderResolver.Environment.NETHER;
+        var normal = RegionFolderResolver.Environment.NORMAL;
+        AtomicInteger warnings = new AtomicInteger();
+        BriskMapConfig defaults = ConfigLoader.load(Map.of(), message -> warnings.incrementAndGet());
+        assertEquals(100, defaults.maxY("world_nether", nether, message -> warnings.incrementAndGet()));
+        assertEquals(Integer.MAX_VALUE, defaults.maxY("world", normal, message -> warnings.incrementAndGet()));
+        assertEquals(Integer.MAX_VALUE, defaults.maxY("world_the_end", RegionFolderResolver.Environment.THE_END,
+                message -> warnings.incrementAndGet()));
+        assertEquals(Integer.MAX_VALUE, defaults.maxY("custom", RegionFolderResolver.Environment.CUSTOM,
+                message -> warnings.incrementAndGet()));
+        BriskMapConfig configured = ConfigLoader.load(Map.of("maps", Map.of(
+                "world_nether", Map.of("max-y", "none"),
+                "world", Map.of("max-y", 90),
+                "broken", Map.of("max-y", "low"))), message -> warnings.incrementAndGet());
+        assertEquals(Integer.MAX_VALUE, configured.maxY("world_nether", nether, message -> warnings.incrementAndGet()));
+        assertEquals(90, configured.maxY("world", normal, message -> warnings.incrementAndGet()));
+        assertEquals(100, configured.maxY("broken", nether, message -> warnings.incrementAndGet()));
+        assertEquals(1, warnings.get());
+    }
+
     @Test void regionFolders() throws Exception {
         Path modernRoot = temp.resolve("modern/world");
         Path modernNormal = Files.createDirectories(modernRoot.resolve("dimensions/minecraft/overworld/region"));
@@ -84,7 +105,7 @@ class MilestoneTest {
         assertTrue(json.contains("\"textures\":null"));
         assertTrue(json.contains("\"dimension\":\"minecraft:overworld\""));
         assertTrue(json.contains("\"dataVersion\":{\"min\":5023,\"max\":5023}"));
-        assertTrue(json.contains("\"extract\":{\"caves\":\"hide\",\"fluids\":\"surface\",\"format\":3}"));
+        assertTrue(json.contains("\"extract\":{\"caves\":\"hide\",\"fluids\":\"surface\",\"format\":4,\"maxY\":null}"));
         assertTrue(json.indexOf("[-1,2]") < json.indexOf("[2,-1]"));
         FileTime modified = Files.getLastModifiedTime(temp.resolve("maps/index.json"));
         assertFalse(writer.write(List.of(map)));
@@ -96,5 +117,14 @@ class MilestoneTest {
         assertTrue(duringStartup.write(List.of()));
         assertTrue(duringStartup.write(List.of(restarted)));
         assertTrue(Files.readString(temp.resolve("maps/index.json")).contains("\"min\":5023,\"max\":5023"));
+    }
+
+    @Test void indexIncludesNumericHeightCut() throws Exception {
+        Path output = Files.createDirectories(temp.resolve("maps/nether"));
+        MapIndexWriter writer = new MapIndexWriter(temp.resolve("maps/index.json"));
+        var map = new MapIndexWriter.MapEntry("nether", "nether", "minecraft:the_nether",
+                new int[]{0, 64, 0}, "hide", "surface", 100, 5023, 5023, output, 123L);
+        assertTrue(writer.write(List.of(map)));
+        assertTrue(Files.readString(temp.resolve("maps/index.json")).contains("\"format\":4,\"maxY\":100"));
     }
 }

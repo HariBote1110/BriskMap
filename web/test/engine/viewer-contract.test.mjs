@@ -59,6 +59,34 @@ test('onError always supplies fatal and code for drawing and region failures',as
   },{mode:'2d',regions:[[0,0]]});
 });
 
+test('empty indexed chunks finish 3D loading',async()=>{
+  const data=Buffer.alloc(18+1+8192);
+  data.write('BRSK');data[4]=4;data[5]=2;data.writeInt16BE(32767,16);
+  await withViewer(async viewer=>{
+    await until(()=>window.__briskReady);
+    assert.equal(viewer.status.phase,'ready');
+    assert.equal(viewer.status.chunksReady,viewer.status.chunksTotal);
+    assert.ok(viewer.status.chunksTotal>0);
+  },{regions:[[0,0]],fetcher:async()=>new Response(data)});
+});
+
+test('a missing indexed region finishes 3D loading',async()=>{
+  await withViewer(async viewer=>{
+    await until(()=>window.__briskReady);
+    assert.equal(viewer.status.phase,'ready');
+    assert.equal(viewer.status.chunksTotal,0);
+  });
+});
+
+test('a failed 3D region is not reported as complete',async()=>{
+  await withViewer(async(viewer,errors)=>{
+    await until(()=>errors.length>0);
+    await until(()=>viewer.status.phase==='ready');
+    assert.equal(window.__briskReady,false);
+    assert.ok(viewer.status.chunksReady<viewer.status.chunksTotal);
+  },{regions:[[0,0]]});
+});
+
 test('setMap resets spawn and rejects an unknown map without changing the view',async()=>{
   await withViewer(async(viewer,errors)=>{
     viewer.setView({x:99,y:5,z:88,yaw:91,pitch:10,distance:8,zoom:4});
