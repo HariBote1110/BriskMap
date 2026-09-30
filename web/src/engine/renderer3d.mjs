@@ -28,7 +28,7 @@ void main(){
   else if(normalIndex==3u)vertexUv=vec2(world.x,-world.z);
   else if(normalIndex==4u)vertexUv=vec2(-world.x,-world.y);
   else vertexUv=vec2(world.x,-world.y);
-  const float faceLight[6]=float[6](0.6,0.6,0.5,1.0,0.8,0.8);
+  const float faceLight[8]=float[8](0.6,0.6,0.5,1.0,0.8,0.8,0.85,0.85);
   const float aoLight[4]=float[4](0.5,0.7,0.85,1.0);
   vertexLight=faceLight[int(normalIndex)]*aoLight[int(ambientOcclusion)];
   vertexLayer=textureLayer;vertexTint=tintIndex;vertexFlags=materialFlags;vertexNormal=normalIndex;
@@ -52,7 +52,7 @@ void main(){
   vec4 colour=flatShading?texelFetch(flatColours,ivec2(int(vertexLayer),0),0):texture(tileArray,vec3(vertexUv,float(vertexLayer)));
   if((vertexFlags&1u)!=0u&&colour.a<0.5)discard;
   const vec3 tints[5]=vec3[5](vec3(1.0),vec3(145.0,189.0,89.0)/255.0,vec3(119.0,171.0,47.0)/255.0,vec3(63.0,118.0,228.0)/255.0,vec3(1.0));
-  const vec3 normals[6]=vec3[6](vec3(-1,0,0),vec3(1,0,0),vec3(0,-1,0),vec3(0,1,0),vec3(0,0,-1),vec3(0,0,1));
+  const vec3 normals[8]=vec3[8](vec3(-1,0,0),vec3(1,0,0),vec3(0,-1,0),vec3(0,1,0),vec3(0,0,-1),vec3(0,0,1),normalize(vec3(1,0,-1)),normalize(vec3(1,0,1)));
   float oldLight=0.55+0.45*max(dot(normals[int(vertexNormal)],normalize(vec3(0.3,1.0,0.5))),0.0);
   float light=flatShading?oldLight:vertexLight;
   outputColour=vec4(colour.rgb*(flatShading?vec3(1.0):tints[int(vertexTint)])*light,colour.a);

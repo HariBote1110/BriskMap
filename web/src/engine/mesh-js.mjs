@@ -12,9 +12,9 @@ const cornerV = [[0, 1, 1, 0], [0, 0, 1, 1]];
 export function meshChunk({ positions, paletteIndices, masks, materials }, mode = 'culled') {
   if (mode !== 'culled' && mode !== 'greedy') throw new Error(`Unknown mode: ${mode}`);
   if (positions.length !== paletteIndices.length || positions.length !== masks.length) throw new Error('Mismatched input lengths');
-  const { faceLayers, faceTints, opaque, alphaTest } = materials;
+  const { faceLayers, faceTints, opaque, alphaTest, shape } = materials;
   const paletteCount = opaque.length;
-  if (faceLayers.length !== paletteCount * 6 || faceTints.length !== paletteCount * 6 || alphaTest.length !== paletteCount) throw new Error('Mismatched material lengths');
+  if (faceLayers.length !== paletteCount * 6 || faceTints.length !== paletteCount * 6 || alphaTest.length !== paletteCount || shape.length !== paletteCount) throw new Error('Mismatched material lengths');
   cells.fill(0);
   present.fill(0);
   for (let i = 0; i < positions.length; i++) {
@@ -29,6 +29,7 @@ export function meshChunk({ positions, paletteIndices, masks, materials }, mode 
   }
   for (let i = 0; i < positions.length; i++) {
     const p = positions[i], palette = paletteIndices[i], mask = masks[i];
+    if (shape[palette] === 1) continue;
     const x = p & 15, y = p >>> 8, z = p >>> 4 & 15;
     for (let normal = 0; normal < 6; normal++) if (mask & 1 << normal) {
       const axis = normal >>> 1, direction = normal & 1, uAxis = (axis + 1) % 3, vAxis = (axis + 2) % 3;
@@ -76,6 +77,20 @@ export function meshChunk({ positions, paletteIndices, masks, materials }, mode 
     indices[indexLength++] = base + (flipped ? 1 : 0); indices[indexLength++] = base + 2; indices[indexLength++] = base + 3;
     quads++;
   }
+  function crossQuad(x0, z0, x1, z1, y, normal, reverse, key) {
+    if (indexLength + 6 > indices.length) { const next = new Uint32Array(indices.length * 2); next.set(indices); indices = next; }
+    const base = vertexLength / 12;
+    if (reverse) {
+      vertex(x1, y, z1, normal, 3, key); vertex(x1, y + 1, z1, normal, 3, key);
+      vertex(x0, y + 1, z0, normal, 3, key); vertex(x0, y, z0, normal, 3, key);
+    } else {
+      vertex(x0, y, z0, normal, 3, key); vertex(x0, y + 1, z0, normal, 3, key);
+      vertex(x1, y + 1, z1, normal, 3, key); vertex(x1, y, z1, normal, 3, key);
+    }
+    indices[indexLength++] = base; indices[indexLength++] = base + 1; indices[indexLength++] = base + 2;
+    indices[indexLength++] = base; indices[indexLength++] = base + 2; indices[indexLength++] = base + 3;
+    quads++;
+  }
   for (let axis = 0; axis < 3; axis++) for (let direction = 0; direction < 2; direction++) {
     const normal = axis * 2 + direction, base = normal * volume, wordBase = normal * wordsPerFace;
     const uAxis = (axis + 1) % 3, vAxis = (axis + 2) % 3;
@@ -98,6 +113,16 @@ export function meshChunk({ positions, paletteIndices, masks, materials }, mode 
       for (let h = 0; h < height; h++) for (let w = 0; w < width; w++) { const nextRank = rank + h * uLimit + w; present[wordBase + (nextRank >>> 5)] &= ~(1 << (nextRank & 31)); }
       quad(axis, direction, slice, u, v, width, height, key, packedAo);
     }
+  }
+  for (let i = 0; i < positions.length; i++) {
+    const palette = paletteIndices[i];
+    if (shape[palette] !== 1) continue;
+    const p = positions[i], x = p & 15, y = p >>> 8, z = p >>> 4 & 15;
+    const face = palette * 6 + 4, key = faceLayers[face] | faceTints[face] << 16 | 1 << 24;
+    crossQuad(x, z, x + 1, z + 1, y, 6, false, key);
+    crossQuad(x, z, x + 1, z + 1, y, 6, true, key);
+    crossQuad(x + 1, z, x, z + 1, y, 7, false, key);
+    crossQuad(x + 1, z, x, z + 1, y, 7, true, key);
   }
   return { vertices: vertices.slice(0, vertexLength), indices: indices.slice(0, indexLength), quads };
 }

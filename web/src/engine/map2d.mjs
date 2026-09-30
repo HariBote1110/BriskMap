@@ -27,8 +27,9 @@ export function regionColours(palette, table = null, means = null) {
     const bracket = palette[block].indexOf('[');
     const name = bracket < 0 ? palette[block] : palette[block].slice(0, bracket);
     const hash = colourFor(name);
-    const layer = materials?.faceLayers[block * 6 + 3] ?? 0;
-    const tint = materials?.faceTints[block * 6 + 3] ?? 0;
+    const face = materials?.shape[block] === 1 ? 4 : 3;
+    const layer = materials?.faceLayers[block * 6 + face] ?? 0;
+    const tint = materials?.faceTints[block * 6 + face] ?? 0;
     for (let channel = 0; channel < 3; channel++) {
       colours[block * 3 + channel] = materials
         ? means[layer * 3 + channel] * tints[tint][channel] / 255

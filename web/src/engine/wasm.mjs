@@ -11,9 +11,9 @@ export async function loadMesher(url = defaultUrl) {
   function meshChunk({ positions, paletteIndices, masks, materials }, mode = 'culled') {
     if (mode !== 'culled' && mode !== 'greedy') throw new Error(`Unknown mode: ${mode}`);
     if (positions.length !== paletteIndices.length || positions.length !== masks.length) throw new Error('Mismatched input lengths');
-    const { faceLayers, faceTints, opaque, alphaTest } = materials;
-    if (faceLayers.length !== opaque.length * 6 || faceTints.length !== opaque.length * 6 || alphaTest.length !== opaque.length) throw new Error('Mismatched material lengths');
-    const inputs = [positions, paletteIndices, masks, faceLayers, faceTints, opaque, alphaTest];
+    const { faceLayers, faceTints, opaque, alphaTest, shape } = materials;
+    if (faceLayers.length !== opaque.length * 6 || faceTints.length !== opaque.length * 6 || alphaTest.length !== opaque.length || shape.length !== opaque.length) throw new Error('Mismatched material lengths');
+    const inputs = [positions, paletteIndices, masks, faceLayers, faceTints, opaque, alphaTest, shape];
     const pointers = [];
     try {
       for (const data of inputs) {
@@ -22,7 +22,7 @@ export async function loadMesher(url = defaultUrl) {
         pointers.push(pointer);
         new Uint8Array(wasm.memory.buffer, pointer, data.byteLength).set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
       }
-      const result = wasm.mesh_chunk(pointers[0], pointers[1], pointers[2], positions.length, pointers[3], pointers[4], pointers[5], pointers[6], opaque.length, mode === 'greedy' ? 1 : 0);
+      const result = wasm.mesh_chunk(pointers[0], pointers[1], pointers[2], positions.length, pointers[3], pointers[4], pointers[5], pointers[6], pointers[7], opaque.length, mode === 'greedy' ? 1 : 0);
       if (!result) throw new Error('WASM meshing failed');
       const view = new DataView(wasm.memory.buffer, result, 24);
       const vertexPointer = view.getUint32(0, true), vertexLength = view.getUint32(4, true);

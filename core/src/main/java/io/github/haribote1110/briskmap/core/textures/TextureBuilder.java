@@ -121,6 +121,8 @@ public final class TextureBuilder {
             Models.FaceData data;
             if (model != null && (special == null || !model.elements().isEmpty())) data = Models.faceData(model);
             else data = new Models.FaceData(false, java.util.Collections.nCopies(6, new Models.Face(special, block.equals("water"))));
+            boolean cross = model != null && model.cross();
+            if (cross) data = new Models.FaceData(false, java.util.Collections.nCopies(6, data.faces().get(4)));
             Integer[] faces = new Integer[6], tints = new Integer[6]; Arrays.fill(faces, 0); Arrays.fill(tints, 0);
             int x = variant.get("x") instanceof Number n ? n.intValue() : 0;
             int y = variant.get("y") instanceof Number n ? n.intValue() : 0;
@@ -139,7 +141,9 @@ public final class TextureBuilder {
             entries++;
             Map<String,Object> result = new LinkedHashMap<>();
             result.put("when", when); result.put("faces", Arrays.asList(faces)); result.put("tints", Arrays.asList(tints));
-            result.put("fullCube", data.fullCube()); result.put("transparent", transparent); return result;
+            result.put("fullCube", data.fullCube()); result.put("transparent", transparent);
+            if (cross) result.put("shape", "cross");
+            return result;
         }
 
         private static byte[] missing() {

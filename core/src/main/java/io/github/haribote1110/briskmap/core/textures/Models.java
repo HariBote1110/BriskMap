@@ -16,7 +16,7 @@ public final class Models {
     private static final int[][] VECTORS = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
     private Models() { }
 
-    public record Model(Map<String,Object> textures, List<Object> elements) {
+    public record Model(Map<String,Object> textures, List<Object> elements, boolean cross) {
         public String texture(Object reference) {
             Set<String> visited = new HashSet<>(); Object current = reference;
             while (current instanceof String string && string.startsWith("#")) {
@@ -49,7 +49,9 @@ public final class Models {
         if (parent != null) textures.putAll(parent.textures());
         if (own.get("textures") instanceof Map<?, ?>) textures.putAll(Json.object(own.get("textures")));
         List<Object> elements = own.get("elements") instanceof List<?> list ? new ArrayList<>(list) : parent == null ? List.of() : parent.elements();
-        Model model = new Model(textures, elements); cache.put(key, model); return model;
+        boolean cross = key.equals("minecraft:block/cross") || key.equals("minecraft:block/tinted_cross")
+                || key.equals("minecraft:block/crop") || parent != null && parent.cross();
+        Model model = new Model(textures, elements, cross); cache.put(key, model); return model;
     }
 
     static FaceData faceData(Model model) {

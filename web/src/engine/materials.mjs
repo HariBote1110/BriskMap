@@ -6,6 +6,7 @@ export function resolveMaterials(palette, table) {
   const faceTints = new Uint8Array(palette.length * 6);
   const opaque = new Uint8Array(palette.length);
   const alphaTest = new Uint8Array(palette.length);
+  const shape = new Uint8Array(palette.length);
   for (let i = 0; i < palette.length; i++) {
     const state = palette[i], bracket = state.indexOf('[');
     const name = bracket < 0 ? state : state.slice(0, bracket);
@@ -23,14 +24,15 @@ export function resolveMaterials(palette, table) {
     }
     opaque[i] = entry.fullCube && !entry.transparent ? 1 : 0;
     alphaTest[i] = entry.transparent ? 1 : 0;
+    shape[i] = entry.shape === 'cross' ? 1 : 0;
   }
-  return { faceLayers, faceTints, opaque, alphaTest };
+  return { faceLayers, faceTints, opaque, alphaTest, shape };
 }
 
 export function syntheticMaterials(palette) {
   const faceLayers = new Uint16Array(palette.length * 6);
   for (let i = 0; i < palette.length; i++) faceLayers.fill((colourFor(palette[i]) & 63) + 1, i * 6, i * 6 + 6);
-  return { faceLayers, faceTints: new Uint8Array(palette.length * 6), opaque: new Uint8Array(palette.length).fill(1), alphaTest: new Uint8Array(palette.length) };
+  return { faceLayers, faceTints: new Uint8Array(palette.length * 6), opaque: new Uint8Array(palette.length).fill(1), alphaTest: new Uint8Array(palette.length), shape: new Uint8Array(palette.length) };
 }
 
 export function flatMaterials(palette, register) {
@@ -44,6 +46,7 @@ export function flatMaterials(palette, register) {
     faceLayers,
     faceTints: new Uint8Array(palette.length * 6),
     opaque: new Uint8Array(palette.length).fill(1),
-    alphaTest: new Uint8Array(palette.length)
+    alphaTest: new Uint8Array(palette.length),
+    shape: new Uint8Array(palette.length)
   };
 }

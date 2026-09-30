@@ -30,6 +30,7 @@ struct Materials<'a> {
     face_tints: &'a [u8],
     opaque: &'a [u8],
     alpha_test: &'a [u8],
+    shape: &'a [u8],
 }
 struct Output {
     vertices: Vec<u8>,
@@ -102,6 +103,17 @@ impl Output {
         }
         self.quads += 1;
     }
+    fn cross_quad(&mut self, x0: usize, z0: usize, x1: usize, z1: usize, y: usize, normal: u8, reverse: bool, key: u32) {
+        let base = (self.vertices.len() / 12) as u32;
+        let corners = if reverse {
+            [(x1, y, z1), (x1, y + 1, z1), (x0, y + 1, z0), (x0, y, z0)]
+        } else {
+            [(x0, y, z0), (x0, y + 1, z0), (x1, y + 1, z1), (x1, y, z1)]
+        };
+        for (x, y, z) in corners { self.vertex(x, y, z, normal, 3, key); }
+        for index in [0, 1, 2, 0, 2, 3] { self.indices.extend_from_slice(&(base + index).to_le_bytes()); }
+        self.quads += 1;
+    }
 }
 fn solid(cells: &[u32], opaque: &[u8], x: i32, y: i32, z: i32) -> u8 {
     if !(0..16).contains(&x) || !(0..384).contains(&y) || !(0..16).contains(&z) {
@@ -126,6 +138,7 @@ unsafe fn mesh_raw(
     if materials.face_layers.len() != palette_count * 12
         || materials.face_tints.len() != palette_count * 6
         || materials.alpha_test.len() != palette_count
+        || materials.shape.len() != palette_count
     {
         return Err(1);
     }
@@ -154,6 +167,7 @@ unsafe fn mesh_raw(
         let p = positions_ptr.add(i * 4).cast::<u32>().read_unaligned() as usize;
         let palette = palettes_ptr.add(i * 4).cast::<u32>().read_unaligned() as usize;
         let mask = masks[i];
+        if materials.shape[palette] == 1 { continue; }
         let xyz = [(p & 15) as i32, (p >> 8) as i32, ((p >> 4) & 15) as i32];
         for normal in 0..6 {
             if mask & (1 << normal) == 0 {
@@ -272,6 +286,21 @@ unsafe fn mesh_raw(
             }
         }
     }
+    for i in 0..count {
+        let p = positions_ptr.add(i * 4).cast::<u32>().read_unaligned() as usize;
+        let palette = palettes_ptr.add(i * 4).cast::<u32>().read_unaligned() as usize;
+        if materials.shape[palette] != 1 { continue; }
+        let x = p & 15;
+        let y = p >> 8;
+        let z = (p >> 4) & 15;
+        let face = palette * 6 + 4;
+        let layer = u16::from_le_bytes([materials.face_layers[face * 2], materials.face_layers[face * 2 + 1]]) as u32;
+        let key = layer | (materials.face_tints[face] as u32) << 16 | 1 << 24;
+        output.cross_quad(x, z, x + 1, z + 1, y, 6, false, key);
+        output.cross_quad(x, z, x + 1, z + 1, y, 6, true, key);
+        output.cross_quad(x + 1, z, x, z + 1, y, 7, false, key);
+        output.cross_quad(x + 1, z, x, z + 1, y, 7, true, key);
+    }
     Ok(output)
 }
 #[no_mangle]
@@ -308,6 +337,7 @@ pub unsafe extern "C" fn mesh_chunk(
     tints_ptr: *const u8,
     opaque_ptr: *const u8,
     alpha_ptr: *const u8,
+    shape_ptr: *const u8,
     palette_count: usize,
     mode: u32,
 ) -> *mut u8 {
@@ -317,6 +347,7 @@ pub unsafe extern "C" fn mesh_chunk(
         face_tints: std::slice::from_raw_parts(tints_ptr, palette_count * 6),
         opaque: std::slice::from_raw_parts(opaque_ptr, palette_count),
         alpha_test: std::slice::from_raw_parts(alpha_ptr, palette_count),
+        shape: std::slice::from_raw_parts(shape_ptr, palette_count),
     };
     match mesh_raw(
         positions_ptr,
@@ -339,11 +370,13 @@ mod tests {
         let tints = [0u8; 6];
         let opaque = [1u8];
         let alpha = [0u8];
+        let shape = [0u8];
         let materials = Materials {
             face_layers: &layers,
             face_tints: &tints,
             opaque: &opaque,
             alpha_test: &alpha,
+            shape: &shape,
         };
         let positions = 0u32.to_le_bytes();
         let palettes = 0u32.to_le_bytes();
