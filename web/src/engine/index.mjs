@@ -25,6 +25,25 @@
  *                    (fatal false, not sent to onError) for an id not in the current index and
  *                    leaves the current map and view untouched. Resolves after the first frame.
  *
+ * Input
+ *   The engine owns all camera input on the canvas (pointer, wheel, keyboard); the page only
+ *   listens to onViewChange. Every change goes through setView, so the clamps apply. The ground is
+ *   the horizontal plane through the focus (y = view.y).
+ *   Mouse / trackpad  Primary drag moves the map: the ground grabbed stays under the cursor.
+ *                     Secondary or middle drag, or a primary drag with Shift / Ctrl / Alt / Meta,
+ *                     rotates (horizontal: yaw, the world follows the cursor) and tilts (down is
+ *                     more top-down) around the focus. Wheel, trackpad scroll and pinch (Ctrl +
+ *                     wheel) zoom towards the cursor; double-click zooms in one step (x2).
+ *   Touch             One finger moves the map. Two fingers: pinch zooms about the midpoint, a
+ *                     twist rotates about it, both fingers moving the same way vertically tilt.
+ *   Keyboard          (canvas focused) Arrows / W A S D move relative to the screen, Q / E rotate,
+ *                     R / F or PageUp / PageDown tilt, + / - zoom, Shift is faster. Held keys move
+ *                     once per animation frame; nothing runs while no key is held.
+ *   2D                Drag moves, wheel / pinch / double-click / + / - zoom, arrows / W A S D move;
+ *                     north stays up (no rotation or tilt).
+ *   Pointers are captured, so a drag continues outside the canvas; the context menu, text
+ *   selection and page scroll / zoom are suppressed on the canvas.
+ *
  * Benchmark hooks (window)
  *   __briskStats  A fresh object is installed for every load: at creation, and whenever the map
  *                 or mode changes (setMode, setMap, setView, or an index change). Its `mode` is

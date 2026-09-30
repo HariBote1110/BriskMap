@@ -2,21 +2,29 @@
 import { el } from './dom.mjs';
 import { ICONS } from './icons.mjs';
 
-// [input key, action key] pairs, taken from the engine contract.
-const CONTROLS = {
+// [input key, action key] pairs, taken from the engine contract (the Input section at the top of
+// engine/index.mjs).
+export const CONTROLS = {
   '3d': {
-    mouse: [['in.drag', 'act.orbit'], ['in.rightDrag', 'act.pan'], ['in.wheel', 'act.zoom']],
-    touch: [['in.oneFinger', 'act.orbit'], ['in.twoFinger', 'act.pan'], ['in.pinch', 'act.zoom']],
-    keyboard: [['in.arrows', 'act.pan'], ['in.wasd', 'act.pan'], ['in.qe', 'act.rotate']],
+    mouse: [
+      ['in.drag', 'act.pan'], ['in.rightDrag', 'act.orbit'], ['in.wheel', 'act.zoom'], ['in.doubleClick', 'act.zoomIn'],
+    ],
+    touch: [
+      ['in.oneFinger', 'act.pan'], ['in.pinch', 'act.zoom'], ['in.twist', 'act.rotate'], ['in.twoFingerVertical', 'act.tilt'],
+    ],
+    keyboard: [
+      ['in.arrows', 'act.pan'], ['in.qe', 'act.rotate'], ['in.rf', 'act.tilt'], ['in.plusMinus', 'act.zoom'],
+      ['in.shift', 'act.faster'],
+    ],
   },
   '2d': {
-    mouse: [['in.drag', 'act.pan'], ['in.wheel', 'act.zoom']],
+    mouse: [['in.drag', 'act.pan'], ['in.wheel', 'act.zoom'], ['in.doubleClick', 'act.zoomIn']],
     touch: [['in.oneFinger', 'act.pan'], ['in.pinch', 'act.zoom']],
-    keyboard: [['in.arrows', 'act.pan']],
+    keyboard: [['in.arrows', 'act.pan'], ['in.plusMinus', 'act.zoom'], ['in.shift', 'act.faster']],
   },
 };
 
-const KEY_INPUTS = new Set(['in.arrows', 'in.wasd', 'in.qe']);
+const KEY_INPUTS = new Set(['in.arrows', 'in.qe', 'in.rf', 'in.plusMinus', 'in.shift']);
 
 export function createHelp({ dialog, openButton, closeButton, title, current, body, note, t }) {
   let mode = '3d';
