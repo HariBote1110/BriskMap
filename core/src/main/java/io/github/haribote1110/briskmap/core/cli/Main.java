@@ -63,7 +63,7 @@ public final class Main {
                 : WorldExtractor.extract(input, output, options, threads, null, () -> false);
         long wall = (System.nanoTime() - start) / 1_000_000;
         System.out.println("{\"caves\":\"" + caves + "\",\"fluids\":\"" + fluids
-                + "\",\"format_version\":4,\"regions\":" + summary.regions()
+                + "\",\"format_version\":5,\"regions\":" + summary.regions()
                 + ",\"regions_written\":" + summary.regionsWritten()
                 + ",\"regions_unchanged\":" + summary.regionsUnchanged()
                 + ",\"regions_deleted\":" + summary.regionsDeleted()

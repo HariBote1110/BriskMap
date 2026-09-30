@@ -95,8 +95,11 @@ public final class ExtractionService implements AutoCloseable {
                     state.failed.clear();
                     for (String name : result.snapshot().keySet()) enqueue(state, name, true);
                 } else {
-                    for (String name : result.changed()) enqueue(state, name, false);
-                    for (String name : state.failed) if (!result.changed().contains(name) && result.snapshot().containsKey(name)) enqueue(state, name, false);
+                    Set<String> pending = new java.util.HashSet<>(result.changed());
+                    for (String name : result.changed()) addNeighbours(name, result.snapshot().keySet(), pending);
+                    for (String name : result.removed()) addNeighbours(name, result.snapshot().keySet(), pending);
+                    for (String name : state.failed) if (result.snapshot().containsKey(name)) pending.add(name);
+                    for (String name : pending) enqueue(state, name, false);
                 }
                 if (!result.removed().isEmpty() || state.regions.isEmpty()) changed.run();
             } catch (IOException exception) {
@@ -104,6 +107,14 @@ public final class ExtractionService implements AutoCloseable {
                 logger.warning("Region scan failed for " + state.target.id() + ": " + exception.getMessage());
             }
         }
+    }
+
+    private static void addNeighbours(String name, Set<String> present, Set<String> pending) {
+        String[] parts = name.split("\\.");
+        int x = Integer.parseInt(parts[1]), z = Integer.parseInt(parts[2]);
+        for (String neighbour : List.of("r." + (x - 1) + "." + z + ".mca", "r." + (x + 1) + "." + z + ".mca",
+                "r." + x + "." + (z - 1) + ".mca", "r." + x + "." + (z + 1) + ".mca"))
+            if (present.contains(neighbour)) pending.add(neighbour);
     }
 
     private static void removeOrphanedOutputs(MapTarget target, Set<String> present) throws IOException {

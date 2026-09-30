@@ -38,6 +38,18 @@ public final class RegionExtractor {
         String name = mca.getFileName().toString();
         String[] parts = name.split("\\.");
         int regionX = Integer.parseInt(parts[1]), regionZ = Integer.parseInt(parts[2]);
+        Region[] adjacent = new Region[4];
+        int[] xOffset = {-1, 1, 0, 0}, zOffset = {0, 0, -1, 1};
+        for (int side = 0; side < 4; side++) {
+            Path path = mca.resolveSibling("r." + (regionX + xOffset[side]) + "." + (regionZ + zOffset[side]) + ".mca");
+            if (Files.isRegularFile(path)) adjacent[side] = new Region(path);
+        }
+        long[] adjacentTimes = new long[128];
+        for (int side = 0; side < 4; side++) for (int coordinate = 0; coordinate < 32; coordinate++) {
+            Region neighbour = adjacent[side];
+            int index = adjacentIndex(side, coordinate);
+            adjacentTimes[side * 32 + coordinate] = neighbour != null && neighbour.present(index) ? neighbour.timestamp(index) : 0;
+        }
         Path twoPath = outDir.resolve(name.replace(".mca", ".b2d"));
         Path threePath = outDir.resolve(name.replace(".mca", ".b3d"));
         Reader oldTwo = options.do2d() && incremental ? valid(twoPath, 1, regionX, regionZ, options.flags(), options.headerMaxY()) : null;
@@ -51,14 +63,18 @@ public final class RegionExtractor {
             changedThree[i] = options.do3d() && (oldThree == null || currentTimes[i] != oldThree.timestamps[i]);
         }
         boolean[] affectedThree = Arrays.copyOf(changedThree, 1024);
+        if (oldThree != null) for (int side = 0; side < 4; side++) for (int coordinate = 0; coordinate < 32; coordinate++) {
+            int at = side * 32 + coordinate;
+            if (adjacentTimes[at] != oldThree.adjacentTimestamps[at]) affectedThree[ownIndex(side, coordinate)] = true;
+        }
         for (int i = 0; i < 1024; i++) if (changedThree[i]) {
             if ((i & 31) > 0) affectedThree[i - 1] = true;
             if ((i & 31) < 31) affectedThree[i + 1] = true;
             if (i >= 32) affectedThree[i - 32] = true;
             if (i < 992) affectedThree[i + 32] = true;
         }
-        boolean writeTwo = options.do2d() && any(changedTwo);
-        boolean writeThree = options.do3d() && any(changedThree);
+        boolean writeTwo = options.do2d() && (any(changedTwo) || oldTwo != null && !Arrays.equals(adjacentTimes, oldTwo.adjacentTimestamps));
+        boolean writeThree = options.do3d() && any(affectedThree);
         if (!writeTwo && !writeThree) return new RegionResult(0, 0, 0, 0,
                 Math.max(oldTwo == null ? 0 : oldTwo.chunkCount(), oldThree == null ? 0 : oldThree.chunkCount()),
                 options.do2d() ? Files.size(twoPath) : 0, options.do3d() ? Files.size(threePath) : 0,
@@ -81,6 +97,13 @@ public final class RegionExtractor {
             for (int i = 0; i < 1024; i++) {
                 try { borders.put(i, region.read(i, inflater, options.blockDefaults()), borderPalette, options.hideCaves(), options.maxY()); }
                 catch (Region.UnsupportedChunkException ignored) { /* Counted during extraction. */ }
+            }
+            for (int side = 0; side < 4; side++) for (int coordinate = 0; coordinate < 32; coordinate++) {
+                Region neighbour = adjacent[side];
+                if (neighbour == null) continue;
+                try { borders.putAdjacent(side, coordinate, neighbour.read(adjacentIndex(side, coordinate), inflater, options.blockDefaults()),
+                        options.hideCaves(), options.maxY()); }
+                catch (Region.UnsupportedChunkException ignored) { /* An unsupported neighbour is open space. */ }
             }
             borderNs = Clock.now() - tick;
         }
@@ -139,8 +162,8 @@ public final class RegionExtractor {
             }
         }
         tick = Clock.now();
-        Format.WriteResult twoResult = writeTwo ? Format.writeV4IfChanged(twoPath, 1, regionX, regionZ, options.flags(), options.headerMaxY(), blocks, biomes, two, currentTimes) : null;
-        Format.WriteResult threeResult = writeThree ? Format.writeV4IfChanged(threePath, 2, regionX, regionZ, options.flags(), options.headerMaxY(), blocks, null, three, currentTimes) : null;
+        Format.WriteResult twoResult = writeTwo ? Format.writeV5IfChanged(twoPath, 1, regionX, regionZ, options.flags(), options.headerMaxY(), blocks, biomes, two, currentTimes, adjacentTimes) : null;
+        Format.WriteResult threeResult = writeThree ? Format.writeV5IfChanged(threePath, 2, regionX, regionZ, options.flags(), options.headerMaxY(), blocks, null, three, currentTimes, adjacentTimes) : null;
         long twoBytes = options.do2d() ? writeTwo ? twoResult.bytes() : Files.size(twoPath) : 0;
         long threeBytes = options.do3d() ? writeThree ? threeResult.bytes() : Files.size(threePath) : 0;
         int outputFiles = (twoResult != null && twoResult.written() ? 1 : 0)
@@ -163,5 +186,25 @@ public final class RegionExtractor {
     private static boolean any(boolean[] values) {
         for (boolean value : values) if (value) return true;
         return false;
+    }
+
+    private static int adjacentIndex(int side, int coordinate) {
+        return switch (side) {
+            case BorderCache.WEST -> 31 + coordinate * 32;
+            case BorderCache.EAST -> coordinate * 32;
+            case BorderCache.NORTH -> coordinate + 992;
+            case BorderCache.SOUTH -> coordinate;
+            default -> throw new IllegalArgumentException("Unknown border direction");
+        };
+    }
+
+    private static int ownIndex(int side, int coordinate) {
+        return switch (side) {
+            case BorderCache.WEST -> coordinate * 32;
+            case BorderCache.EAST -> 31 + coordinate * 32;
+            case BorderCache.NORTH -> coordinate;
+            case BorderCache.SOUTH -> coordinate + 992;
+            default -> throw new IllegalArgumentException("Unknown border direction");
+        };
     }
 }

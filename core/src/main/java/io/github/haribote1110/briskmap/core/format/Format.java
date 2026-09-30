@@ -77,24 +77,25 @@ public final class Format {
         return packed.toByteArray();
     }
 
-    public static long writeV4(Path path, int kind, int regionX, int regionZ, int flags, int maxY,
-            Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps) throws IOException {
-        return writeV4(path, kind, regionX, regionZ, flags, maxY, blocks, biomes, compressed, timestamps, false).bytes();
+    public static long writeV5(Path path, int kind, int regionX, int regionZ, int flags, int maxY,
+            Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps, long[] adjacentTimestamps) throws IOException {
+        return writeV5(path, kind, regionX, regionZ, flags, maxY, blocks, biomes, compressed, timestamps, adjacentTimestamps, false).bytes();
     }
 
     public record WriteResult(long bytes, boolean written) { }
 
-    public static WriteResult writeV4IfChanged(Path path, int kind, int regionX, int regionZ, int flags, int maxY,
-            Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps) throws IOException {
-        return writeV4(path, kind, regionX, regionZ, flags, maxY, blocks, biomes, compressed, timestamps, true);
+    public static WriteResult writeV5IfChanged(Path path, int kind, int regionX, int regionZ, int flags, int maxY,
+            Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps, long[] adjacentTimestamps) throws IOException {
+        return writeV5(path, kind, regionX, regionZ, flags, maxY, blocks, biomes, compressed, timestamps, adjacentTimestamps, true);
     }
 
-    private static WriteResult writeV4(Path path, int kind, int regionX, int regionZ, int flags, int maxY,
-            Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps, boolean skipIdentical) throws IOException {
+    private static WriteResult writeV5(Path path, int kind, int regionX, int regionZ, int flags, int maxY,
+            Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps, long[] adjacentTimestamps, boolean skipIdentical) throws IOException {
+        if (timestamps.length != 1024 || adjacentTimestamps.length != 128) throw new IllegalArgumentException("Invalid timestamp count");
         ByteArrayOutputStream header = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(header);
         out.write(new byte[]{'B', 'R', 'S', 'K'});
-        out.writeByte(4); out.writeByte(kind); out.writeInt(regionX); out.writeInt(regionZ);
+        out.writeByte(5); out.writeByte(kind); out.writeInt(regionX); out.writeInt(regionZ);
         out.writeByte(flags); out.writeByte(0); out.writeShort(maxY);
         table(out, blocks);
         if (kind == 1) table(out, biomes);
@@ -111,6 +112,7 @@ public final class Format {
                 for (byte[] data : compressed) if (data != null) stream.write(data);
                 DataOutputStream trailer = new DataOutputStream(stream);
                 for (long timestamp : timestamps) trailer.writeInt((int) timestamp);
+                for (long timestamp : adjacentTimestamps) trailer.writeInt((int) timestamp);
                 trailer.write(new byte[]{'B', 'R', 'S', 'T'});
             }
             if (skipIdentical && Files.isRegularFile(path) && Files.mismatch(temp, path) == -1)
