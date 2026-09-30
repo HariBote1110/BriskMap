@@ -116,6 +116,37 @@ webSocketTest('fake CDP socket produces a complete JSON line', async () => {
   }
 });
 
+webSocketTest('production viewer navigation and results use the BriskMap hooks', async () => {
+  const commands = [];
+  const server = fakeCdp(message => commands.push(message));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const directory = mkdtempSync(join(tmpdir(), 'clientbench-test-'));
+  let socket;
+  try {
+    const launch = async () => {
+      socket = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+      await new Promise(resolve => socket.addEventListener('open', resolve, { once: true }));
+      return { client: new CdpClient(socket), child: { pid: process.pid }, version: { Browser: 'Fake Chrome', 'User-Agent': 'Fake UA' }, close: async () => socket.close() };
+    };
+    const result = await runOne({ viewer: 'brisk-prod', caseName: 'A', scenarioName: 'top', runNumber: 1,
+      scenario: { distance: 400, rotation: 0, angle: 0.1 }, setting: { radius: 256 }, chrome: 'fake',
+      headless: true, out: join(directory, 'results.jsonl'), targetY: 50.92,
+      briskProdUrl: 'http://local:8124/', briskProdMap: 'nether', launch });
+    const navigation = new URL(commands.find(command => command.method === 'Page.navigate').params.url);
+    assert.equal(navigation.searchParams.get('radius'), '256');
+    assert.equal(new URLSearchParams(navigation.hash.slice(1)).get('map'), 'nether');
+    assert.ok(commands.some(command => command.method === 'Runtime.evaluate' && command.params.expression.includes('window.__setCamera({ rotation })')));
+    assert.equal(result.viewer, 'brisk-prod');
+    assert.deepEqual(result.brisk_stats, { t_upload_done_ms: 100 });
+    assert.equal(result.valid, true);
+    assert.deepEqual(JSON.parse(readFileSync(join(directory, 'results.jsonl'), 'utf8')), result);
+  } finally {
+    socket?.close();
+    await new Promise(resolve => server.close(resolve));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 webSocketTest('mobile emulation commands precede navigation and renderer is evaluated', async () => {
   const commands = [];
   const server = fakeCdp(message => commands.push(message));

@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import { parsePsTime, collectProcessCpu, parseProcStat, collectProcCpu, detectSettle, orbitStatistics, classifyUrl, argumentsFrom, invalidReasons } from '../run.mjs';
+import * as run from '../run.mjs';
+const { parsePsTime, collectProcessCpu, parseProcStat, collectProcCpu, detectSettle, orbitStatistics, classifyUrl, argumentsFrom, invalidReasons } = run;
 
 const procStat = (pid, name, ppid, utime, stime) => {
   const fields = Array(19).fill('0');
@@ -42,6 +43,33 @@ test('phone options parse with defaults and reject invalid durations', () => {
   assert.throws(() => argumentsFrom(['--chrome', 'chromium', '--settle-timeout-ms', 'abc']));
 });
 
+test('production viewer options parse and require a URL when selected alone', () => {
+  const defaults = argumentsFrom(['--chrome', 'chromium']);
+  assert.equal(defaults.briskProdUrl, undefined);
+  assert.equal(defaults.briskProdMap, 'world');
+  const options = argumentsFrom(['--chrome', 'chromium', '--brisk-prod-url', 'http://local:8124/', '--brisk-prod-map', 'nether', '--only', 'brisk-prod:A:top']);
+  assert.equal(options.briskProdUrl, 'http://local:8124/');
+  assert.equal(options.briskProdMap, 'nether');
+  assert.equal(options.only, 'brisk-prod:A:top');
+  assert.throws(() => argumentsFrom(['--chrome', 'chromium', '--only', 'brisk-prod:A:top']), /brisk-prod-url/);
+});
+
+test('production URL maps scenario angles to clamped pitch and rounds yaw', () => {
+  const setting = { radius: 256 };
+  const options = { briskProdUrl: 'http://local:8124/', briskProdMap: 'nether' };
+  const url = new URL(run.pageUrl('brisk-prod', { distance: 150, rotation: 0.6, angle: 0.9 }, setting, 50.92, options));
+  assert.equal(url.origin, 'http://local:8124');
+  assert.equal(url.pathname, '/');
+  assert.equal(url.searchParams.get('radius'), '256');
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(url.hash.slice(1))), {
+    map: 'nether', mode: '3d', x: '0', z: '0', y: '50.92', yaw: '34.4', pitch: String(90 - 0.9 * 180 / Math.PI), d: '150',
+  });
+  const top = new URL(run.pageUrl('brisk-prod', { distance: 400, rotation: 0, angle: 0 }, setting, 70, options));
+  assert.equal(new URLSearchParams(top.hash.slice(1)).get('pitch'), '89');
+  const low = new URL(run.pageUrl('brisk-prod', { distance: 40, rotation: 0, angle: Math.PI / 2 }, setting, 70, options));
+  assert.equal(new URLSearchParams(low.hash.slice(1)).get('pitch'), '10');
+});
+
 test('every invalid-run reason is classified independently', () => {
   const brisk = { viewer: 'brisk', timed_out: false, orbit: { frames: 2 }, transfer_bytes: 10 };
   assert.deepEqual(invalidReasons(brisk, { screenshotFailed: false, briskReady: true, briskError: null }), []);
@@ -50,6 +78,9 @@ test('every invalid-run reason is classified independently', () => {
   assert.deepEqual(invalidReasons({ ...brisk, orbit: { frames: 0 } }, { briskReady: true }), ['orbit_no_frames']);
   assert.deepEqual(invalidReasons(brisk, { briskReady: false }), ['brisk_not_ready']);
   assert.deepEqual(invalidReasons(brisk, { briskReady: true, briskError: 'boom' }), ['brisk_error']);
+  const production = { ...brisk, viewer: 'brisk-prod' };
+  assert.deepEqual(invalidReasons(production, { briskReady: true }), []);
+  assert.deepEqual(invalidReasons(production, { briskReady: false, briskError: 'boom' }), ['brisk_not_ready', 'brisk_error']);
   assert.deepEqual(invalidReasons({ ...brisk, transfer_bytes: 0 }, { briskReady: true }), ['zero_transfer_bytes']);
   const blue = { ...brisk, viewer: 'bluemap', bluemap_view_distances: { hires: 256, lowres: 0 } };
   assert.deepEqual(invalidReasons(blue, { setting: { hires: 256, lowres: 0 } }), []);
@@ -108,6 +139,14 @@ test('URL classes', () => {
   assert.equal(classifyUrl('bluemap', 'http://x/app.js'), 'other');
   assert.equal(classifyUrl('brisk', 'http://x/data/a.bin'), 'data');
   assert.equal(classifyUrl('brisk', 'http://x/viewer/index.html'), 'other');
+  for (const path of ['/maps/index.json', '/maps/nether/r.0.-1.b3d'])
+    assert.equal(classifyUrl('brisk-prod', `http://x${path}`), 'data');
+  for (const path of ['/textures/v1/atlas.png', '/textures/v1/blocks.json'])
+    assert.equal(classifyUrl('brisk-prod', `http://x${path}`), 'textures');
+  for (const path of ['/ui/main.mjs', '/ui/styles.css', '/engine/index.mjs', '/engine/mesher.wasm'])
+    assert.equal(classifyUrl('brisk-prod', `http://x${path}`), 'code');
+  assert.equal(classifyUrl('brisk-prod', 'http://x/'), 'page');
+  assert.equal(classifyUrl('brisk-prod', 'http://x/favicon.ico'), 'other');
 });
 
 test('instrument counts WebGL buffer and texture upload overloads', () => {
