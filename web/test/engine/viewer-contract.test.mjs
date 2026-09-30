@@ -7,7 +7,7 @@ const maps = [
   {id:'second',spawn:{x:300,y:81,z:-200},regions:[]},
 ];
 
-async function withViewer(run,{mode='3d',regions=[],fetcher=async()=>new Response('',{status:404})}={}) {
+async function withViewer(run,{mode='3d',regions=[],fetcher=async()=>new Response('',{status:404}),onStatus,WorkerClass}={}) {
   const keys=['window','location','navigator','ResizeObserver','matchMedia','devicePixelRatio','requestAnimationFrame','Worker','fetch'];
   const previous=new Map(keys.map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
   const gl=new Proxy({}, {get(_target,key){if(key==='getShaderParameter'||key==='getProgramParameter')return()=>true;if(typeof key==='string'&&/^[A-Z][A-Z0-9_]*$/.test(key))return 1;return()=>({});}});
@@ -20,14 +20,14 @@ async function withViewer(run,{mode='3d',regions=[],fetcher=async()=>new Respons
     matchMedia:()=>({addEventListener(){},removeEventListener(){}}),
     devicePixelRatio:1,
     requestAnimationFrame:callback=>setImmediate(()=>callback(performance.now())),
-    Worker:class {postMessage(){} terminate(){}},
+    Worker:WorkerClass??class {postMessage(){} terminate(){}},
     fetch:fetcher,
   };
   for(const [key,value] of Object.entries(replacements))Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});
   const errors=[];
   let viewer;
   try{
-    viewer=await createViewer(canvas,{index:{format:1,etag:'"old"',textures:null,maps:[{...maps[0],regions},maps[1]]},mapId:'first',mode,onError:error=>errors.push(error)});
+    viewer=await createViewer(canvas,{index:{format:1,etag:'"old"',textures:null,maps:[{...maps[0],regions},maps[1]]},mapId:'first',mode,onStatus,onError:error=>errors.push(error)});
     await run(viewer,errors);
   }finally{
     viewer?.dispose();
@@ -74,8 +74,53 @@ test('a missing indexed region finishes 3D loading',async()=>{
   await withViewer(async viewer=>{
     await until(()=>window.__briskReady);
     assert.equal(viewer.status.phase,'ready');
-    assert.equal(viewer.status.chunksTotal,0);
+    assert.ok(viewer.status.chunksTotal>0);
+    assert.equal(viewer.status.chunksReady,viewer.status.chunksTotal);
+    assert.equal(viewer.status.regionsLoaded,viewer.status.regionsTotal);
   });
+});
+
+test('status and bench counters agree for present, empty and absent 3D data',async()=>{
+  const data=Buffer.alloc(18+1+8192+1);
+  data.write('BRSK');data[4]=4;data[5]=2;data.writeInt16BE(100,16);
+  data.writeUInt32BE(18+1+8192,19);data.writeUInt32BE(1,23);
+  data[data.length-1]=0;
+  const events=[];
+  let meshes=0;
+  class MeshWorker {
+    postMessage(message){
+      if(message.type==='mesh'){
+        meshes++;
+        setImmediate(()=>this.onmessage({data:{id:message.id,quads:0,vertices:new Uint8Array(),indices:new Uint8Array()}}));
+      }
+    }
+    terminate(){}
+  }
+  await withViewer(async viewer=>{
+    await until(()=>window.__briskReady);
+    await new Promise(resolve=>setTimeout(resolve,120));
+    assert.ok(events.length>0);
+    for(const {status,selected,loaded} of events.filter(event=>event.status.phase==='ready')){
+      assert.equal(status.chunksTotal,selected);
+      assert.equal(status.chunksReady,loaded);
+      assert.equal(status.chunksReady,status.chunksTotal);
+      assert.equal(status.regionsLoaded,status.regionsTotal);
+    }
+    assert.equal(viewer.status.regionsLoaded,viewer.status.regionsTotal);
+    assert.ok(viewer.status.regionsTotal>1);
+    assert.ok(window.__briskStats.requests>0);
+    assert.equal(meshes,1);
+  },{regions:[[0,0]],WorkerClass:MeshWorker,fetcher:async()=>new Response(data),onStatus:status=>events.push({status,selected:window.__briskStats.chunks_selected,loaded:window.__briskStats.chunks_loaded})});
+});
+
+test('2D region progress advances when its header is fetched',async()=>{
+  const data=Buffer.alloc(18+2+8192);
+  data.write('BRSK');data[4]=4;data[5]=1;
+  await withViewer(async viewer=>{
+    await until(()=>viewer.status.regionsLoaded===viewer.status.regionsTotal);
+    assert.ok(viewer.status.regionsTotal>0);
+    assert.equal(viewer.status.phase,'loading');
+  },{mode:'2d',regions:[[0,0]],fetcher:async()=>new Response(data)});
 });
 
 test('a failed 3D region is not reported as complete',async()=>{

@@ -27,7 +27,7 @@ class TextureServiceTest {
     @Test void alreadyReadyNeedsNoJarOrConsent() throws Exception {
         Path folder = Files.createDirectories(temporary.resolve("textures/26.3"));
         Files.write(folder.resolve("atlas.png"), new byte[]{1});
-        Files.writeString(folder.resolve("blocks.json"), "{\"source\":\"minecraft-client-26.3.jar\"}");
+        Files.writeString(folder.resolve("blocks.json"), "{\"generator\":2,\"source\":\"minecraft-client-26.3.jar\"}");
         TextureService service = service(false, (version, cache) -> { fail("Download attempted"); return cache; });
         assertEquals(TextureService.Status.READY, service.ensure().join().status());
         assertEquals("textures/26.3/", service.state().relativeUrl());
@@ -44,6 +44,22 @@ class TextureServiceTest {
         TextureService service = service(false, (version, destination) -> { fail("Download attempted"); return destination; });
         assertEquals(TextureService.Status.READY, service.ensure().join().status());
         assertTrue(Files.size(folder.resolve("atlas.png")) > 1);
+    }
+
+    @Test void staleGeneratorIsRebuiltFromCachedJarWithoutDownload() throws Exception {
+        Path folder = Files.createDirectories(temporary.resolve("textures/26.3"));
+        Files.write(folder.resolve("atlas.png"), new byte[]{1});
+        Path cache = Files.createDirectories(temporary.resolve("cache"));
+        syntheticJar(cache.resolve("minecraft-client-26.3.jar"));
+        for (String oldTable : List.of("{\"source\":\"minecraft-client-26.3.jar\"}",
+                "{\"generator\":1,\"source\":\"minecraft-client-26.3.jar\"}")) {
+            Files.write(folder.resolve("atlas.png"), new byte[]{1});
+            Files.writeString(folder.resolve("blocks.json"), oldTable);
+            TextureService service = service(false, (version, destination) -> { fail("Download attempted"); return destination; });
+            assertEquals(TextureService.Status.READY, service.ensure().join().status());
+            assertTrue(Files.size(folder.resolve("atlas.png")) > 1);
+            assertEquals(2L, Json.object(Json.parse(Files.readString(folder.resolve("blocks.json")))).get("generator"));
+        }
     }
 
     @Test void buildingStateIsVisibleBeforeBackgroundTaskRuns() {

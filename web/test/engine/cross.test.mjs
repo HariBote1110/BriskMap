@@ -49,7 +49,7 @@ test('cross plants use four independent double-sided planes in both modes', asyn
 });
 
 test('material shape and 2D plant colour use the cross texture', () => {
-  const table={format:1,tile:16,layers:3,textures:['a','b','c'],blocks:{'minecraft:short_grass':[{when:{},faces:[2,2,0,0,2,2],tints:[1,1,0,0,1,1],fullCube:false,transparent:true,shape:'cross'}]}};
+  const table={format:1,generator:2,tile:16,layers:3,textures:['a','b','c'],blocks:{'minecraft:short_grass':[{when:{},faces:[2,2,0,0,2,2],tints:[1,1,0,0,1,1],fullCube:false,transparent:true,shape:'cross'}]}};
   const materials=resolveMaterials(['minecraft:short_grass'],table);
   assert.deepEqual(materials.shape,new Uint8Array([1]));
   assert.deepEqual(flatMaterials(['minecraft:short_grass'],()=>1).shape,new Uint8Array([0]));

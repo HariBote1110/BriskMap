@@ -41,6 +41,8 @@ class ModelsBuilderTest {
         }
         Path out = temporary.resolve("orientable-out"); TextureBuilder.build(jar,out);
         Map<String,Object> document = Json.object(Json.parse(Files.readString(out.resolve("blocks.json"))));
+        assertEquals(2L, document.get("generator"));
+        assertEquals(java.util.List.of("format", "generator", "source"), document.keySet().stream().limit(3).toList());
         Map<String,Object> entry = entry(Json.object(document.get("blocks")),"minecraft:orientable",0);
         java.util.List<?> textures = (java.util.List<?>) document.get("textures");
         assertEquals("minecraft:block/front", textures.get(((Number)((java.util.List<?>)entry.get("faces")).get(0)).intValue()));
@@ -74,6 +76,7 @@ class ModelsBuilderTest {
                 }
             }
             oldDocument.put("blocks", newBlocks);
+            assertEquals(2L, newDocument.remove("generator"));
             assertEquals(oldDocument, newDocument, version);
             Png.Image expected = Png.decode(Files.readAllBytes(oracle.resolve("atlas.png")));
             Png.Image actual = Png.decode(Files.readAllBytes(out.resolve("atlas.png")));
