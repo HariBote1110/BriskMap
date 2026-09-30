@@ -3,7 +3,8 @@ import { rasteriseRegion } from './map2d.mjs';
 import { loadMesher } from './wasm.mjs';
 
 const palettes = new Map();
-let mesherPromise;
+const mesherPromise=loadMesher();
+mesherPromise.then(()=>self.postMessage({type:'ready'}),()=>{});
 async function inflate(bytes) {
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
@@ -20,11 +21,15 @@ self.onmessage = async ({data}) => {
     if (data.type === 'mesh') {
       const palette=palettes.get(data.paletteKey);
       if (!palette) throw new Error(`Missing palette ${data.paletteKey}`);
-      const mesher=await (mesherPromise??=loadMesher());
+      const mesher=await mesherPromise;
+      const inflateStart=performance.now();
       const raw=await inflate(data.compressed);
+      const inflateMs=performance.now()-inflateStart;
       const chunk=decode3d(raw,{palette:{length:palette.paletteLength}});
+      const meshStart=performance.now();
       const output=mesher.meshChunk({...chunk,materials:palette.materials},'greedy');
-      self.postMessage({id:data.id,type:'mesh',cx:data.cx,cz:data.cz,vertices:output.vertices,indices:output.indices,quads:output.quads},[output.vertices.buffer,output.indices.buffer]);
+      const meshMs=performance.now()-meshStart;
+      self.postMessage({id:data.id,type:'mesh',cx:data.cx,cz:data.cz,vertices:output.vertices,indices:output.indices,quads:output.quads,inflateMs,meshMs},[output.vertices.buffer,output.indices.buffer]);
     } else if (data.type === 'raster') {
       const header={palette:{length:data.paletteLength},biomes:{length:data.biomeLength}};
       const chunks=[];

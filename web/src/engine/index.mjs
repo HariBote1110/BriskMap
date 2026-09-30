@@ -42,8 +42,20 @@ import { Renderer3D } from './renderer3d.mjs';
 import { Renderer2D } from './renderer2d.mjs';
 import { WorkerPool } from './worker-pool.mjs';
 import { attachInput } from './input.mjs';
+import { DrawScheduler } from './draw-scheduler.mjs';
 
-export const loadIndex = fetchIndex;
+let warmPool=null;
+let indexDoneAt=null;
+export function workerCountFor(hardwareConcurrency){return Math.min(4,Math.max(1,hardwareConcurrency??2));}
+export function prewarm(hardwareConcurrency=globalThis.navigator?.hardwareConcurrency){
+  if(!warmPool||warmPool.disposed)warmPool=new WorkerPool(workerCountFor(hardwareConcurrency));
+  return warmPool;
+}
+export async function loadIndex(...args){
+  const index=await fetchIndex(...args);
+  indexDoneAt=performance.now();
+  return index;
+}
 
 const regionKey = (rx,rz) => `${rx},${rz}`;
 const chunkKey = (cx,cz) => `${cx},${cz}`;
@@ -54,7 +66,15 @@ function codedError(code,cause,fatal=false){
 }
 
 function freshStats(mode){
-  return {chunks_selected:0,chunks_loaded:0,regions:0,requests:0,bytes_fetched:0,quads:0,vertex_bytes:0,index_bytes:0,texture_upload_bytes:0,t_textures_done_ms:null,t_blocks_json_done_ms:null,t_atlas_decoded_ms:null,texture_upload_ms:null,t_first_byte_ms:null,t_fetch_done_ms:null,t_mesh_done_ms:null,t_upload_done_ms:null,mode};
+  // All t_* fields are milliseconds since navigation; totals and idle gaps are elapsed milliseconds.
+  // t_index_done_ms: parsed index; t_viewer_created_ms: constructed viewer; t_workers_spawned_ms:
+  // pool construction; t_first_worker_ready_ms/t_all_workers_ready_ms: WASM instances ready.
+  // t_first_chunk_meshed_ms: first mesh reply; worker_mesh_ms_total: WASM calls summed across workers;
+  // worker_inflate_ms_total: deflate time summed across workers; worker_idle_gaps: ready worker idle
+  // time from fetch start to mesh completion, summed; main_upload_ms_total: mesh buffer and VAO set-up;
+  // draws_during_load/draw_ms_during_load: draw count and main-thread draw time before ready;
+  // workers: pool size. Existing counters and timestamps retain their previous meanings.
+  return {chunks_selected:0,chunks_loaded:0,regions:0,requests:0,bytes_fetched:0,quads:0,vertex_bytes:0,index_bytes:0,texture_upload_bytes:0,t_textures_done_ms:null,t_blocks_json_done_ms:null,t_atlas_decoded_ms:null,texture_upload_ms:null,t_first_byte_ms:null,t_fetch_done_ms:null,t_mesh_done_ms:null,t_upload_done_ms:null,t_index_done_ms:indexDoneAt,t_viewer_created_ms:null,t_workers_spawned_ms:null,t_first_worker_ready_ms:null,t_all_workers_ready_ms:null,t_first_chunk_meshed_ms:null,worker_mesh_ms_total:0,worker_inflate_ms_total:0,worker_idle_gaps:0,main_upload_ms_total:0,draws_during_load:0,draw_ms_during_load:0,workers:0,mode};
 }
 
 function checkedView(spawn,mapId,mode,partial){
@@ -106,7 +126,7 @@ async function loadTextures(baseUrl,path,stats,signal) {
 }
 
 class ViewerEngine {
-  constructor(canvas,gl,options) {
+  constructor(canvas,gl,options,pool) {
     this.canvas=canvas;
     this.gl=gl;
     this.options=options;
@@ -118,8 +138,7 @@ class ViewerEngine {
     this.statusData={phase:'loading',mode:this.view.mode,textures:false,regionsLoaded:0,regionsTotal:0,chunksReady:0,chunksTotal:0,fps:0};
     this.renderer3d=new Renderer3D(gl);
     this.renderer2d=new Renderer2D(gl);
-    const count=Math.max(1,Math.min(4,(navigator.hardwareConcurrency??2)-1));
-    this.pool=new WorkerPool(count);
+    this.pool=pool;
     this.epoch=0;
     this.abortController=new AbortController();
     this.disposed=false;
@@ -136,11 +155,15 @@ class ViewerEngine {
     this.edges2d=new Map();
     this.lastStatusAt=0;
     this.lastViewAt=0;
-    this.frameQueued=false;
+    this.drawScheduler=new DrawScheduler(time=>this.draw(time));
     this.firstFrameResolvers=[];
     this.fetchActive=0;
     this.fetchWaiters=[];
     this.stats=freshStats(this.view.mode);
+    this.stats.t_workers_spawned_ms=this.pool.spawnedAt;
+    this.stats.t_first_worker_ready_ms=this.pool.firstReadyAt;
+    this.stats.t_all_workers_ready_ms=this.pool.allReadyAt;
+    this.stats.workers=this.pool.workers.length;
     if(typeof window!=='undefined'){
       window.__briskStats=this.stats;
       window.__briskReady=false;
@@ -245,15 +268,19 @@ class ViewerEngine {
     if(this.canvas.width!==width||this.canvas.height!==height){this.canvas.width=width;this.canvas.height=height;this.gl.viewport(0,0,width,height);this.refresh();}
     this.drawSoon();
   }
-  drawSoon(){if(this.disposed||this.frameQueued)return;this.frameQueued=true;requestAnimationFrame(time=>this.draw(time));}
+  drawSoon({loading=false}={}){if(!this.disposed)this.drawScheduler.request({loading});}
   draw(time){
-    this.frameQueued=false;
     if(this.disposed)return;
     const width=this.canvas.width||1,height=this.canvas.height||1;
+    const started=performance.now();
     try{
       if(this.view.mode==='3d')this.renderer3d.draw(this.view,width,height);
       else this.renderer2d.draw(this.view,width,height,this.visibleRegionKeys);
     }catch(error){this.report(error,{code:'render',fatal:true});return;}
+    if(this.statusData.phase==='loading'){
+      this.stats.draws_during_load++;
+      this.stats.draw_ms_during_load+=performance.now()-started;
+    }
     if(typeof window!=='undefined'&&window.__recordFrames)window.__frames.push(time);
     const interval=this.lastFrameTime?time-this.lastFrameTime:0;
     if(interval>0&&interval<250){
@@ -274,7 +301,7 @@ class ViewerEngine {
     const map=this.findMap(mapId);
     const old=this.view;
     this.view=checkedView(map.spawn,mapId,mode,{...old,...partial});
-    if(mapId!==old.mapId||mode!==old.mode){this.map=map;this.resetSource();}
+    if(mapId!==old.mapId||mode!==old.mode){this.map=map;if(mode==='3d')this.renderer3d.invalidateState();this.resetSource();}
     else if(this.view.x!==old.x||this.view.z!==old.z||(mode==='2d'&&this.view.zoom!==old.zoom))this.refresh();
     this.notifyView();
     this.drawSoon();
@@ -304,6 +331,8 @@ class ViewerEngine {
     this.statusData.phase='loading';
     this.statusData.message=undefined;
     this.stats=freshStats(this.view.mode);
+    this.stats.t_viewer_created_ms=this.createdAt;
+    this.pool.track(this.stats);
     if(typeof window!=='undefined'){window.__briskStats=this.stats;window.__briskReady=false;}
     this.refresh();
   }
@@ -326,6 +355,7 @@ class ViewerEngine {
     this.notifyStatus();
   }
   refresh3d(){
+    if(this.pool.fetchStartedAt===null)this.pool.track(this.stats);
     const radius=this.radius(),selected=selectChunks(this.view.x,this.view.z,radius);
     this.selectedChunks=selected;
     this.selectedChunkKeys=new Set(selected.map(item=>chunkKey(item.cx,item.cz)));
@@ -357,7 +387,7 @@ class ViewerEngine {
       for(const item of needed)pending.add(chunkKey(item.cx,item.cz));
       this.load3dGroup(region,needed,epoch,pending).catch(error=>this.report(error,{code:'region'}));
     }
-    this.drawSoon();
+    this.drawSoon({loading:true});
   }
   update3dProgress(){
     let ready=0,regions=0;
@@ -384,6 +414,7 @@ class ViewerEngine {
         }
       });
       if(!loaded||epoch!==this.epoch)return;
+      this.stats.t_fetch_done_ms=performance.now();
       if(loaded.header.x!==rx||loaded.header.z!==rz)throw new Error(`Region coordinate mismatch: ${region}`);
       this.loadedRegionHeaders.add(region);
       this.update3dProgress();
@@ -399,21 +430,25 @@ class ViewerEngine {
         const promise=this.pool.run('mesh',{paletteKey:palette.key,cx:chunk.cx,cz:chunk.cz,compressed},{palette,transfer:[compressed.buffer],tag:key}).then(data=>{
           pending.delete(key);
           if(epoch!==this.epoch||!this.selectedChunkKeys.has(key))return;
+          const meshedAt=performance.now();
+          this.stats.t_first_chunk_meshed_ms??=meshedAt;
+          this.stats.t_mesh_done_ms=meshedAt;
+          const uploadStart=performance.now();
           this.renderer3d.uploadMesh(key,chunk.cx,chunk.cz,data);
+          this.stats.main_upload_ms_total+=performance.now()-uploadStart;
           this.loadedChunks.set(key,{cx:chunk.cx,cz:chunk.cz});
           this.stats.quads+=data.quads;
           this.stats.vertex_bytes+=data.vertices.byteLength;
           this.stats.index_bytes+=data.indices.byteLength;
-          this.stats.t_mesh_done_ms=performance.now();
           this.stats.t_upload_done_ms=performance.now();
           this.update3dProgress();
-          this.drawSoon();
+          if(this.statusData.chunksReady===this.statusData.chunksTotal)this.pool.finishTracking();
+          this.drawSoon({loading:this.statusData.chunksReady!==this.statusData.chunksTotal});
         }).catch(error=>{pending.delete(key);if(error.code==='cancelled'){if(epoch===this.epoch&&this.selectedChunkKeys.has(key))this.refresh3d();return;}if(epoch===this.epoch&&this.selectedChunkKeys.has(key)){this.skippedChunks.add(key);this.report(error,{code:'region'});this.update3dProgress();this.drawSoon();}});
         tasks.push(promise);
       }
-      this.stats.t_fetch_done_ms=performance.now();
       this.update3dProgress();
-      this.drawSoon();
+      this.drawSoon({loading:true});
       await Promise.all(tasks);
     }catch(error){
       for(const chunk of chunks){const key=chunkKey(chunk.cx,chunk.cz);pending.delete(key);if(epoch===this.epoch)this.skippedChunks.add(key);}
@@ -495,7 +530,7 @@ class ViewerEngine {
     const changed=this.statusData.phase!=='ready'||(typeof window!=='undefined'&&window.__briskReady!==complete);
     this.statusData.phase='ready';
     if(typeof window!=='undefined')window.__briskReady=complete;
-    if(changed)this.notifyStatus();
+    if(changed){this.pool.finishTracking();this.notifyStatus();}
   }
   async pollIndex(){
     if(this.disposed||this.polling)return;
@@ -526,6 +561,7 @@ class ViewerEngine {
     this.dprQuery?.removeEventListener('change',this.dprChanged);
     this.detachInput();
     this.pool.dispose();
+    this.drawScheduler.dispose();
     this.renderer3d.dispose();this.renderer2d.dispose();
     for(const resolve of this.firstFrameResolvers.splice(0))resolve();
     if(typeof window!=='undefined'){delete window.__setCamera;window.__briskReady=false;}
@@ -535,7 +571,14 @@ class ViewerEngine {
 export async function createViewer(canvas,options){
   const gl=canvas.getContext('webgl2',{alpha:false,antialias:true});
   if(!gl)throw Object.assign(new Error('WebGL2 is unavailable'),{code:'webgl2',fatal:true});
-  try{return new ViewerEngine(canvas,gl,options);}
+  try{
+    const pool=prewarm();
+    const viewer=new ViewerEngine(canvas,gl,options,pool);
+    viewer.createdAt=performance.now();
+    viewer.stats.t_viewer_created_ms=viewer.createdAt;
+    warmPool=null;
+    return viewer;
+  }
   catch(error){
     const tagged=Object.assign(error?.code?error:codedError('render',error),{fatal:true});
     options.onError?.(tagged);

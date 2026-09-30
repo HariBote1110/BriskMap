@@ -84,7 +84,10 @@ export class Renderer3D {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     this.textured = false;
+    this.stateDirty = true;
   }
+
+  invalidateState() { this.stateDirty = true; }
 
   useTextures(table, bitmap) {
     const gl = this.gl;
@@ -105,6 +108,7 @@ export class Renderer3D {
       gl.deleteTexture(this.atlas);
       this.atlas = texture;
       this.textured = true;
+      this.invalidateState();
       return { bytes: table.layers * 1024, uploadMs };
     } catch (error) {
       gl.deleteTexture(texture);
@@ -134,6 +138,7 @@ export class Renderer3D {
   uploadMesh(key, cx, cz, data) {
     const gl = this.gl;
     this.remove(key);
+    if(data.indices.byteLength===0)return;
     const vao = gl.createVertexArray(), vertices = gl.createBuffer(), indices = gl.createBuffer();
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertices);
@@ -151,16 +156,19 @@ export class Renderer3D {
 
   draw(view,width,height) {
     const gl = this.gl;
-    gl.enable(gl.DEPTH_TEST);
-    gl.enable(gl.CULL_FACE);
-    gl.cullFace(gl.BACK);
-    gl.clearColor(125/255,171/255,1,1);
+    if(this.stateDirty){
+      gl.enable(gl.DEPTH_TEST);
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(gl.BACK);
+      gl.clearColor(125/255,171/255,1,1);
+      gl.useProgram(this.program);
+      gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D_ARRAY,this.atlas);
+      gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,this.flatTexture);
+      this.stateDirty=false;
+    }
     gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
-    gl.useProgram(this.program);
     gl.uniformMatrix4fv(this.matrix,false,new Float32Array(viewProjection(view,width/height)));
     gl.uniform1i(this.flat,this.textured?0:1);
-    gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D_ARRAY,this.atlas);
-    gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,this.flatTexture);
     for (const item of this.meshes.values()) {
       gl.bindVertexArray(item.vao);
       gl.uniform3f(this.offset,item.cx*16,-64,item.cz*16);

@@ -1,6 +1,6 @@
 // BriskMap viewer UI entry point: the chrome around the engine's map canvas.
 // Everything here is event-driven; the only timer loop is the empty-index retry.
-import { loadIndex, createViewer } from '../engine/index.mjs';
+import { loadIndex, createViewer, prewarm } from '../engine/index.mjs';
 import { pickLanguage, createTranslator } from './i18n.mjs';
 import { parseHash, serialiseHash, resolveMapId, planHashChange } from './url-state.mjs';
 import { formatCoord, dimensionKind, progressInfo, progressText, phaseAnnouncement } from './format.mjs';
@@ -359,6 +359,7 @@ function showFatal(message) {
 
 // `quiet` keeps the current card (the empty-index retry shows its own "Checking…").
 async function boot({ quiet = false } = {}) {
+  try { prewarm(); } catch (error) { showFatal(error?.message); return; }
   clearTimeout(emptyRetryTimer);
   if (!quiet) states.show({ compact: true, scrim: false, title: t('state.loadingIndex') });
   let loaded;
