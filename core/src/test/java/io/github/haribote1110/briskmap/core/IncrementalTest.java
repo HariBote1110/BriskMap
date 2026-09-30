@@ -25,6 +25,93 @@ import org.junit.jupiter.api.Assumptions;
 class IncrementalTest {
     private static final ExtractOptions OPTIONS = new ExtractOptions(false, true, 6, true, true);
 
+    @Test void adjacentRegionEdgesOpenFacesAndTrackNeighbourChanges() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "region-seams-");
+        Path west = dir.resolve("r.0.0.mca"), east = dir.resolve("r.1.0.mca");
+        Path updated = dir.resolve("updated"), fresh = dir.resolve("fresh");
+        byte[][] westChunks = new byte[1024][], eastChunks = new byte[1024][];
+        int[] westStamps = new int[1024], eastStamps = new int[1024];
+        westChunks[31] = chunk("minecraft:full", "minecraft:stone", -1); westStamps[31] = 1;
+        eastChunks[0] = chunk("minecraft:full", "minecraft:stone", 0); eastStamps[0] = 1;
+        writeRegion(west, westChunks, westStamps);
+        writeRegion(east, eastChunks, eastStamps);
+        RegionExtractor.extract(west, updated, OPTIONS);
+        RegionExtractor.extract(east, updated, OPTIONS);
+        Reader first = new Reader(updated.resolve("r.0.0.b3d"));
+        assertTrue((mask(first.read3d(31), 8, 8, 15) & 2) != 0, "East face borders air in the adjacent region");
+        assertEquals(1, first.adjacentTimestamps[32 + 0]);
+
+        eastChunks[0] = chunk("minecraft:full", "minecraft:stone", -1); eastStamps[0] = 2;
+        writeRegion(east, eastChunks, eastStamps);
+        RegionResult changed = RegionExtractor.update(west, updated, OPTIONS);
+        assertTrue(changed.written());
+        assertEquals(1, changed.chunksExtracted(), "Only the touching own chunk is extracted");
+        Reader second = new Reader(updated.resolve("r.0.0.b3d"));
+        assertEquals(0, mask(second.read3d(31), 8, 8, 15) & 2);
+        assertEquals(2, second.adjacentTimestamps[32]);
+        RegionExtractor.extract(west, fresh, OPTIONS);
+        compare3d(second, new Reader(fresh.resolve("r.0.0.b3d")), 31);
+        assertFalse(RegionExtractor.update(west, updated, OPTIONS).written());
+
+        Files.delete(east);
+        assertTrue(RegionExtractor.update(west, updated, OPTIONS).written());
+        Reader missing = new Reader(updated.resolve("r.0.0.b3d"));
+        assertTrue((mask(missing.read3d(31), 8, 8, 15) & 2) != 0);
+        assertEquals(0, missing.adjacentTimestamps[32]);
+    }
+
+    @Test void reverseSeamFluidAndHeightCutUseTheSameNeighbourRules() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "reverse-seam-");
+        Path west = dir.resolve("r.0.0.mca"), east = dir.resolve("r.1.0.mca"), out = dir.resolve("out");
+        byte[][] westChunks = new byte[1024][], eastChunks = new byte[1024][];
+        int[] westStamps = new int[1024], eastStamps = new int[1024];
+        westChunks[31] = chunk("minecraft:full", "minecraft:stone", 15); westStamps[31] = 1;
+        eastChunks[0] = chunk("minecraft:full", "minecraft:stone", -1); eastStamps[0] = 1;
+        writeRegion(west, westChunks, westStamps);
+        writeRegion(east, eastChunks, eastStamps);
+        RegionExtractor.extract(east, out, OPTIONS.withMaxY(8));
+        Reader cut = new Reader(out.resolve("r.1.0.b3d"));
+        assertTrue((mask(cut.read3d(0), 8, 8, 0) & 1) != 0);
+
+        westChunks[31] = chunk("minecraft:full", "minecraft:water", -1); westStamps[31] = 2;
+        eastChunks[0] = chunk("minecraft:full", "minecraft:water", -1); eastStamps[0] = 2;
+        writeRegion(west, westChunks, westStamps);
+        writeRegion(east, eastChunks, eastStamps);
+        RegionExtractor.extract(east, out, OPTIONS);
+        Reader fluid = new Reader(out.resolve("r.1.0.b3d"));
+        assertEquals(0, mask(fluid.read3d(0), 8, 8, 0) & 1);
+        Files.delete(west);
+        assertTrue(RegionExtractor.update(east, out, OPTIONS).written());
+        assertTrue((mask(new Reader(out.resolve("r.1.0.b3d")).read3d(0), 8, 8, 0) & 1) != 0);
+    }
+
+    @Test void v4OutputForcesFullRebuild() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "old-format-");
+        Path input = dir.resolve("r.0.0.mca"), out = dir.resolve("out");
+        byte[][] chunks = new byte[1024][]; int[] stamps = new int[1024];
+        chunks[0] = chunk("minecraft:full", "minecraft:stone", -1); stamps[0] = 1;
+        writeRegion(input, chunks, stamps);
+        RegionExtractor.extract(input, out, OPTIONS);
+        for (String extension : List.of("b2d", "b3d")) {
+            Path path = out.resolve("r.0.0." + extension);
+            byte[] old = Files.readAllBytes(path);
+            old[4] = 4;
+            Files.write(path, old);
+        }
+        RegionResult rebuilt = RegionExtractor.update(input, out, OPTIONS);
+        assertTrue(rebuilt.written());
+        assertEquals(1, rebuilt.chunksExtracted());
+        assertEquals(5, new Reader(out.resolve("r.0.0.b2d")).version);
+        assertEquals(5, new Reader(out.resolve("r.0.0.b3d")).version);
+    }
+
+    private static int mask(Extracted3d shell, int y, int z, int x) {
+        int section = (y + 64) >>> 4;
+        int position = ((y + 64) & 15) * 256 + z * 16 + x;
+        int at = Arrays.binarySearch(shell.positions[section], position);
+        return at < 0 ? 0 : shell.masks[section][at] & 255;
+    }
+
     @Test void nonFullAndUnsupportedChunksDoNotRewriteUnchangedRegion() throws Exception {
         Path dir = Files.createTempDirectory(Path.of("core/build"), "unchanged-edge-");
         Path input = dir.resolve("r.0.0.mca"), out = dir.resolve("out");
@@ -87,11 +174,11 @@ class IncrementalTest {
         timestamps[0] = 7;
         Palette blocks = new Palette();
         blocks.index("minecraft:stone");
-        assertTrue(Format.writeV4IfChanged(file, 2, 0, 0, 0, Short.MAX_VALUE, blocks, null, payloads, timestamps).written());
+        assertTrue(Format.writeV5IfChanged(file, 2, 0, 0, 0, Short.MAX_VALUE, blocks, null, payloads, timestamps, new long[128]).written());
         byte[] before = Files.readAllBytes(file);
         FileTime fixedTime = FileTime.fromMillis(1_700_000_000_000L);
         Files.setLastModifiedTime(file, fixedTime);
-        Format.WriteResult unchanged = Format.writeV4IfChanged(file, 2, 0, 0, 0, Short.MAX_VALUE, blocks, null, payloads, timestamps);
+        Format.WriteResult unchanged = Format.writeV5IfChanged(file, 2, 0, 0, 0, Short.MAX_VALUE, blocks, null, payloads, timestamps, new long[128]);
         assertFalse(unchanged.written());
         assertEquals(before.length, unchanged.bytes());
         assertArrayEquals(before, Files.readAllBytes(file));
@@ -147,7 +234,7 @@ class IncrementalTest {
         byte[] damaged = Files.readAllBytes(file); damaged[4] = 3; Files.write(file, damaged);
         assertThrows(java.io.IOException.class, () -> new Reader(file));
         assertTrue(RegionExtractor.update(input, out, changed).written());
-        assertEquals(4, new Reader(file).version);
+        assertEquals(5, new Reader(file).version);
         damaged = Files.readAllBytes(file); damaged[damaged.length - 1] = 0; Files.write(file, damaged);
         assertTrue(RegionExtractor.update(input, out, changed).written());
         assertEquals(1, new Reader(file).chunkCount());
@@ -293,6 +380,11 @@ class IncrementalTest {
     }
 
     private static byte[] chunk(String status, String state, boolean edgeAir) throws IOException {
+        return chunk(status, state, edgeAir ? 0 : -1);
+    }
+
+    private static byte[] chunk(String status, String state, int airX) throws IOException {
+        boolean edgeAir = airX >= 0;
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(bytes);
         out.writeByte(10); out.writeUTF("");
@@ -313,7 +405,7 @@ class IncrementalTest {
         out.writeUTF(state); if (edgeAir) out.writeUTF("minecraft:air");
         if (edgeAir) {
             out.writeByte(12); out.writeUTF("data"); out.writeInt(256);
-            int affected = 8 * 256 + 8 * 16;
+            int affected = 8 * 256 + 8 * 16 + airX;
             for (int i = 0; i < 256; i++) out.writeLong(i == affected / 16 ? 1L << (affected % 16 * 4) : 0);
         }
         out.writeByte(0);

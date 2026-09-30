@@ -164,7 +164,7 @@ public final class ResearchPortTest {
         chunks[0] = solidChunk(); borders.put(0, chunks[0], palette, false);
         shell = Extractor.extract3d(chunks[0], palette, borders, 0, false);
         int seam = (8 * 16 + 8) * 16;
-        check(Arrays.binarySearch(shell.positions[4], seam) < 0, "region seam kept");
+        check(Arrays.binarySearch(shell.positions[4], seam) >= 0, "missing adjacent region must be open");
         check(shell.same(referenceShell(chunks, 0, palette, false)), "region edge shell differs");
     }
 
@@ -201,8 +201,8 @@ public final class ResearchPortTest {
         three[32] = Format.compress(Format.encode3d(shell), compressor);
         long[] timestamps = new long[1024]; timestamps[32] = 1234;
         Path a = dir.resolve("r.0.0.b2d"), b = dir.resolve("r.0.0.b3d");
-        Format.writeV4(a, 1, 0, 0, 3, Short.MAX_VALUE, blocks, biomes, two, timestamps);
-        Format.writeV4(b, 2, 0, 0, 3, Short.MAX_VALUE, blocks, null, three, timestamps);
+        Format.writeV5(a, 1, 0, 0, 3, Short.MAX_VALUE, blocks, biomes, two, timestamps, new long[128]);
+        Format.writeV5(b, 2, 0, 0, 3, Short.MAX_VALUE, blocks, null, three, timestamps, new long[128]);
         Reader r2 = new Reader(a), r3 = new Reader(b);
         Extracted2d got2 = r2.read2d(32); Extracted3d got3 = r3.read3d(32);
         check(Arrays.equals(surface.y, got2.y) && Arrays.equals(surface.block, got2.block) && Arrays.equals(surface.biome, got2.biome) && Arrays.equals(surface.depth, got2.depth), "2d differs");
@@ -287,7 +287,7 @@ public final class ResearchPortTest {
                     else if (nx > 15) neighbourIndex = (index & 31) == 31 ? -1 : index + 1;
                     else if (nz < 0) neighbourIndex = index < 32 ? -1 : index - 32;
                     else if (nz > 15) neighbourIndex = index >= 992 ? -1 : index + 32;
-                    if (neighbourIndex < 0) neighbourOccluding = true;
+                    if (neighbourIndex < 0) neighbourOccluding = false;
                     else if (chunks[neighbourIndex] == null) neighbourOccluding = false;
                     else {
                         int localX = nx & 15, localZ = nz & 15;
