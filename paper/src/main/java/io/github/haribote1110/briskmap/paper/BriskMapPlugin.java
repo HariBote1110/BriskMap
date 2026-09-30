@@ -93,7 +93,14 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
 
     private BriskMapConfig readSettings() {
         FileConfiguration file = getConfig();
-        return ConfigLoader.load(file::get, getLogger()::warning);
+        Map<String, Map<String, Object>> maps = new HashMap<>();
+        var section = file.getConfigurationSection("maps");
+        if (section != null) for (String name : section.getKeys(false)) {
+            Map<String, Object> world = new HashMap<>();
+            world.put("max-y", section.get(name + ".max-y"));
+            maps.put(name, world);
+        }
+        return ConfigLoader.load(key -> key.equals("maps") ? section == null ? file.get("maps") : maps : file.get(key), getLogger()::warning);
     }
 
     private BlockDefaults serverBlockDefaults() {
@@ -155,7 +162,8 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
                 .ifPresentOrElse(region -> {
                     var spawn = world.getSpawnLocation();
                     extraction.add(new MapTarget(id, id, key.toString(), region, out,
-                            new int[]{spawn.getBlockX(), spawn.getBlockY(), spawn.getBlockZ()}));
+                            new int[]{spawn.getBlockX(), spawn.getBlockY(), spawn.getBlockZ()},
+                            settings.maxY(id, environment, getLogger()::warning)));
                     extraction.scanNow(id);
                 }, () -> {
                     if (missingRegionWarnings.shouldWarn(id))
@@ -199,7 +207,7 @@ public final class BriskMapPlugin extends JavaPlugin implements Listener, Comman
         for (MapTarget target : service.targets()) {
             var status = statuses.get(target.id());
             if (status != null) entries.add(new MapIndexWriter.MapEntry(target.id(), target.name(), target.dimension(),
-                    target.spawn(), settings.caves(), settings.fluids(), status.dataVersionMin(),
+                    target.spawn(), settings.caves(), settings.fluids(), target.maxY(), status.dataVersionMin(),
                     status.dataVersionMax(), target.outDir(), status.updated()));
         }
         try { index.write(entries, textures == null ? null : textures.state().relativeUrl()); }

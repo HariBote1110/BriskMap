@@ -40,8 +40,8 @@ public final class RegionExtractor {
         int regionX = Integer.parseInt(parts[1]), regionZ = Integer.parseInt(parts[2]);
         Path twoPath = outDir.resolve(name.replace(".mca", ".b2d"));
         Path threePath = outDir.resolve(name.replace(".mca", ".b3d"));
-        Reader oldTwo = options.do2d() && incremental ? valid(twoPath, 1, regionX, regionZ, options.flags()) : null;
-        Reader oldThree = options.do3d() && incremental ? valid(threePath, 2, regionX, regionZ, options.flags()) : null;
+        Reader oldTwo = options.do2d() && incremental ? valid(twoPath, 1, regionX, regionZ, options.flags(), options.headerMaxY()) : null;
+        Reader oldThree = options.do3d() && incremental ? valid(threePath, 2, regionX, regionZ, options.flags(), options.headerMaxY()) : null;
         if (oldTwo != null && oldThree != null && !oldTwo.blocks.equals(oldThree.blocks)) oldThree = null;
         boolean[] changedTwo = new boolean[1024], changedThree = new boolean[1024];
         long[] currentTimes = new long[1024];
@@ -79,7 +79,7 @@ public final class RegionExtractor {
             borders = new BorderCache();
             Palette borderPalette = new Palette();
             for (int i = 0; i < 1024; i++) {
-                try { borders.put(i, region.read(i, inflater, options.blockDefaults()), borderPalette, options.hideCaves()); }
+                try { borders.put(i, region.read(i, inflater, options.blockDefaults()), borderPalette, options.hideCaves(), options.maxY()); }
                 catch (Region.UnsupportedChunkException ignored) { /* Counted during extraction. */ }
             }
             borderNs = Clock.now() - tick;
@@ -119,7 +119,7 @@ public final class RegionExtractor {
             extracted++;
             if (changedTwo[i]) {
                 tick = Clock.now();
-                byte[] payload = Format.encode2d(Extractor.extract2d(chunk, blocks, biomes));
+                byte[] payload = Format.encode2d(Extractor.extract2d(chunk, blocks, biomes, options.maxY()));
                 extract2dNs += Clock.now() - tick;
                 tick = Clock.now();
                 two[i] = Format.compress(payload, deflater);
@@ -128,7 +128,7 @@ public final class RegionExtractor {
             if (affectedThree[i]) {
                 tick = Clock.now();
                 Extracted3d shell = Extractor.extract3d(chunk, blocks, borders, i,
-                        options.hideCaves(), options.surfaceFluids());
+                        options.hideCaves(), options.surfaceFluids(), options.maxY());
                 byte[] payload = Format.encode3d(shell);
                 extract3dNs += Clock.now() - tick;
                 shellBlocks += shell.count(); blocksNonair += shell.nonair;
@@ -139,8 +139,8 @@ public final class RegionExtractor {
             }
         }
         tick = Clock.now();
-        Format.WriteResult twoResult = writeTwo ? Format.writeV3IfChanged(twoPath, 1, regionX, regionZ, options.flags(), blocks, biomes, two, currentTimes) : null;
-        Format.WriteResult threeResult = writeThree ? Format.writeV3IfChanged(threePath, 2, regionX, regionZ, options.flags(), blocks, null, three, currentTimes) : null;
+        Format.WriteResult twoResult = writeTwo ? Format.writeV4IfChanged(twoPath, 1, regionX, regionZ, options.flags(), options.headerMaxY(), blocks, biomes, two, currentTimes) : null;
+        Format.WriteResult threeResult = writeThree ? Format.writeV4IfChanged(threePath, 2, regionX, regionZ, options.flags(), options.headerMaxY(), blocks, null, three, currentTimes) : null;
         long twoBytes = options.do2d() ? writeTwo ? twoResult.bytes() : Files.size(twoPath) : 0;
         long threeBytes = options.do3d() ? writeThree ? threeResult.bytes() : Files.size(threePath) : 0;
         int outputFiles = (twoResult != null && twoResult.written() ? 1 : 0)
@@ -153,10 +153,10 @@ public final class RegionExtractor {
                 shellBlocks, blocksNonair, shellFluidBlocks, faces);
     }
 
-    private static Reader valid(Path path, int kind, int x, int z, int flags) {
+    private static Reader valid(Path path, int kind, int x, int z, int flags, int maxY) {
         try {
             Reader reader = new Reader(path);
-            return reader.kind == kind && reader.regionX == x && reader.regionZ == z && reader.flags == flags ? reader : null;
+            return reader.kind == kind && reader.regionX == x && reader.regionZ == z && reader.flags == flags && reader.maxY == maxY ? reader : null;
         } catch (IOException ex) { return null; }
     }
 

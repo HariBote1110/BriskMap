@@ -17,7 +17,7 @@ public final class Reader {
     private final byte[] bytes;
     private final int[] offsets = new int[1024], lengths = new int[1024];
     public final long[] timestamps = new long[1024];
-    public final int flags;
+    public final int flags, maxY;
     public final int version, kind, regionX, regionZ;
     public final List<String> blocks, biomes;
 
@@ -26,12 +26,13 @@ public final class Reader {
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes));
         if (in.readByte() != 'B' || in.readByte() != 'R' || in.readByte() != 'S' || in.readByte() != 'K') throw new IOException("Invalid magic");
         version = in.readUnsignedByte();
-        if (version != 3) throw new IOException("Unsupported format version " + version);
+        if (version != 4) throw new IOException("Unsupported format version " + version);
         kind = in.readUnsignedByte();
         if (kind != 1 && kind != 2) throw new IOException("Invalid kind");
         regionX = in.readInt(); regionZ = in.readInt();
         flags = in.readUnsignedByte();
         if ((flags & ~7) != 0 || in.readUnsignedByte() != 0) throw new IOException("Invalid flags");
+        maxY = in.readShort();
         blocks = table(in);
         biomes = kind == 1 ? table(in) : List.of();
         int expectedOffset = bytes.length - in.available() + 8192;

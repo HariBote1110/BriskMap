@@ -11,6 +11,12 @@ extract:
   scan-interval-seconds: 30
 worlds:
   exclude: []
+# Per-world height cut. Nether worlds default to 100; other worlds have no cut.
+# maps:
+#   world_nether:
+#     max-y: 100
+#   world:
+#     max-y: none
 textures:
   # Enabling this downloads Mojang's client jar and means accepting the Minecraft EULA.
   accept-mojang-download: false

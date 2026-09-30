@@ -7,8 +7,13 @@ public final class BorderCache {
     private final long[][][] water = new long[1024][][], lava = new long[1024][][];
 
     public void put(int index, Chunk chunk, Palette palette, boolean hideCaves) {
+        put(index, chunk, palette, hideCaves, Integer.MAX_VALUE);
+    }
+
+    public void put(int index, Chunk chunk, Palette palette, boolean hideCaves, int maxY) {
         if (chunk == null || !"minecraft:full".equals(chunk.status)) { masks[index] = null; water[index] = null; lava[index] = null; return; }
         int[][] all = Extractor.decodeBlocks(chunk, palette);
+        int[] floor = Extractor.floors(chunk, maxY);
         boolean[] occluding = new boolean[palette.size()];
         byte[] fluids = new byte[palette.size()];
         for (int i = 0; i < occluding.length; i++) { occluding[i] = Extractor.isOccluding(palette.get(i)); fluids[i] = Extractor.fluid(palette.get(i)); }
@@ -16,6 +21,7 @@ public final class BorderCache {
         long[][] waterSides = new long[4][96], lavaSides = new long[4][96];
         for (int y = 0; y < 384; y++) {
             int section = y >>> 4, localY = y & 15, worldY = y - 64;
+            if (worldY > maxY) continue;
             for (int t = 0; t < 16; t++) {
                 int west = all[section][localY * 256 + t * 16];
                 int east = all[section][localY * 256 + t * 16 + 15];
@@ -23,10 +29,10 @@ public final class BorderCache {
                 int south = all[section][localY * 256 + 240 + t];
                 int bit = y * 16 + t, word = bit >>> 6;
                 long flag = 1L << (bit & 63);
-                if (Extractor.occludes(west, occluding, chunk.oceanFloor, 0, t, worldY, hideCaves)) sides[WEST][word] |= flag;
-                if (Extractor.occludes(east, occluding, chunk.oceanFloor, 15, t, worldY, hideCaves)) sides[EAST][word] |= flag;
-                if (Extractor.occludes(north, occluding, chunk.oceanFloor, t, 0, worldY, hideCaves)) sides[NORTH][word] |= flag;
-                if (Extractor.occludes(south, occluding, chunk.oceanFloor, t, 15, worldY, hideCaves)) sides[SOUTH][word] |= flag;
+                if (Extractor.occludes(west, occluding, floor, 0, t, worldY, hideCaves)) sides[WEST][word] |= flag;
+                if (Extractor.occludes(east, occluding, floor, 15, t, worldY, hideCaves)) sides[EAST][word] |= flag;
+                if (Extractor.occludes(north, occluding, floor, t, 0, worldY, hideCaves)) sides[NORTH][word] |= flag;
+                if (Extractor.occludes(south, occluding, floor, t, 15, worldY, hideCaves)) sides[SOUTH][word] |= flag;
                 if (fluids[west] == 1) waterSides[WEST][word] |= flag;
                 if (fluids[east] == 1) waterSides[EAST][word] |= flag;
                 if (fluids[north] == 1) waterSides[NORTH][word] |= flag;

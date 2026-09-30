@@ -31,7 +31,7 @@ public final class Main {
         }
         Path input = null, output = null, defaultsPath = null;
         String caves = "hide", fluids = "surface", mode = "both";
-        int threads = Runtime.getRuntime().availableProcessors(), level = 6;
+        int threads = Runtime.getRuntime().availableProcessors(), level = 6, maxY = Integer.MAX_VALUE;
         boolean update = false;
         for (int i = 0; i < args.length; i++) {
             String option = args[i];
@@ -46,6 +46,7 @@ public final class Main {
                 case "--mode" -> mode = value;
                 case "--threads" -> threads = Integer.parseInt(value);
                 case "--level" -> level = Integer.parseInt(value);
+                case "--max-y" -> maxY = Integer.parseInt(value);
                 case "--block-defaults" -> defaultsPath = Path.of(value);
                 default -> throw new IllegalArgumentException("Unknown option " + option);
             }
@@ -53,16 +54,16 @@ public final class Main {
         if (input == null || output == null || !(caves.equals("hide") || caves.equals("keep"))
                 || !(fluids.equals("surface") || fluids.equals("volume"))
                 || !(mode.equals("both") || mode.equals("2d") || mode.equals("3d")) || threads < 1)
-            throw new IllegalArgumentException("Usage: --in DIR --out DIR [--caves keep|hide] [--fluids volume|surface] [--threads N] [--level 0-9] [--mode 2d|3d|both] [--block-defaults FILE.json] [--update]");
+            throw new IllegalArgumentException("Usage: --in DIR --out DIR [--caves keep|hide] [--fluids volume|surface] [--threads N] [--level 0-9] [--mode 2d|3d|both] [--max-y Y] [--block-defaults FILE.json] [--update]");
         ExtractOptions options = new ExtractOptions(caves.equals("hide"), fluids.equals("surface"), level,
-                !mode.equals("3d"), !mode.equals("2d"), defaultsPath == null ? BlockDefaults.empty() : BlockDefaults.readJson(defaultsPath));
+                !mode.equals("3d"), !mode.equals("2d"), defaultsPath == null ? BlockDefaults.empty() : BlockDefaults.readJson(defaultsPath), maxY);
         long start = System.nanoTime();
         WorldExtractor.Summary summary = update
                 ? WorldExtractor.update(input, output, options, threads, null, () -> false)
                 : WorldExtractor.extract(input, output, options, threads, null, () -> false);
         long wall = (System.nanoTime() - start) / 1_000_000;
         System.out.println("{\"caves\":\"" + caves + "\",\"fluids\":\"" + fluids
-                + "\",\"format_version\":3,\"regions\":" + summary.regions()
+                + "\",\"format_version\":4,\"regions\":" + summary.regions()
                 + ",\"regions_written\":" + summary.regionsWritten()
                 + ",\"regions_unchanged\":" + summary.regionsUnchanged()
                 + ",\"regions_deleted\":" + summary.regionsDeleted()

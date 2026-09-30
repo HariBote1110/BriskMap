@@ -77,25 +77,25 @@ public final class Format {
         return packed.toByteArray();
     }
 
-    public static long writeV3(Path path, int kind, int regionX, int regionZ, int flags,
+    public static long writeV4(Path path, int kind, int regionX, int regionZ, int flags, int maxY,
             Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps) throws IOException {
-        return writeV3(path, kind, regionX, regionZ, flags, blocks, biomes, compressed, timestamps, false).bytes();
+        return writeV4(path, kind, regionX, regionZ, flags, maxY, blocks, biomes, compressed, timestamps, false).bytes();
     }
 
     public record WriteResult(long bytes, boolean written) { }
 
-    public static WriteResult writeV3IfChanged(Path path, int kind, int regionX, int regionZ, int flags,
+    public static WriteResult writeV4IfChanged(Path path, int kind, int regionX, int regionZ, int flags, int maxY,
             Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps) throws IOException {
-        return writeV3(path, kind, regionX, regionZ, flags, blocks, biomes, compressed, timestamps, true);
+        return writeV4(path, kind, regionX, regionZ, flags, maxY, blocks, biomes, compressed, timestamps, true);
     }
 
-    private static WriteResult writeV3(Path path, int kind, int regionX, int regionZ, int flags,
+    private static WriteResult writeV4(Path path, int kind, int regionX, int regionZ, int flags, int maxY,
             Palette blocks, Palette biomes, byte[][] compressed, long[] timestamps, boolean skipIdentical) throws IOException {
         ByteArrayOutputStream header = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(header);
         out.write(new byte[]{'B', 'R', 'S', 'K'});
-        out.writeByte(3); out.writeByte(kind); out.writeInt(regionX); out.writeInt(regionZ);
-        out.writeByte(flags); out.writeByte(0);
+        out.writeByte(4); out.writeByte(kind); out.writeInt(regionX); out.writeInt(regionZ);
+        out.writeByte(flags); out.writeByte(0); out.writeShort(maxY);
         table(out, blocks);
         if (kind == 1) table(out, biomes);
         int cursor = header.size() + 8192;

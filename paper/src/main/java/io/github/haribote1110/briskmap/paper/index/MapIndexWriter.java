@@ -23,8 +23,13 @@ public final class MapIndexWriter {
     public MapIndexWriter(Path index) { this.index = index; }
 
     public record MapEntry(String id, String name, String dimension, int[] spawn, String caves,
-            String fluids, int dataVersionMin, int dataVersionMax, Path outDir, long updated) {
+            String fluids, int maxY, int dataVersionMin, int dataVersionMax, Path outDir, long updated) {
         public MapEntry { spawn = spawn.clone(); }
+        public MapEntry(String id, String name, String dimension, int[] spawn, String caves,
+                String fluids, int dataVersionMin, int dataVersionMax, Path outDir, long updated) {
+            this(id, name, dimension, spawn, caves, fluids, Integer.MAX_VALUE,
+                    dataVersionMin, dataVersionMax, outDir, updated);
+        }
         @Override public int[] spawn() { return spawn.clone(); }
     }
 
@@ -64,7 +69,8 @@ public final class MapIndexWriter {
                     .append(",\"dimension\":").append(quote(map.dimension())).append(",\"spawn\":[")
                     .append(spawn[0]).append(',').append(spawn[1]).append(',').append(spawn[2])
                     .append("],\"extract\":{\"caves\":").append(quote(map.caves()))
-                    .append(",\"fluids\":").append(quote(map.fluids())).append(",\"format\":3}");
+                    .append(",\"fluids\":").append(quote(map.fluids())).append(",\"format\":4,\"maxY\":")
+                    .append(map.maxY() == Integer.MAX_VALUE ? "null" : map.maxY()).append('}');
             List<int[]> regions = new ArrayList<>();
             long latestOutput = 0;
             if (Files.isDirectory(map.outDir())) try (var files = Files.list(map.outDir())) {

@@ -68,7 +68,7 @@ plugins/BriskMap/
       "name": "world",
       "dimension": "minecraft:overworld",
       "spawn": [0, 64, 0],
-      "extract": { "caves": "hide", "fluids": "surface", "format": 3 },
+      "extract": { "caves": "hide", "fluids": "surface", "format": 4, "maxY": null },
       "dataVersion": { "min": 5023, "max": 5023 },
       "regions": [[-1, -1], [0, 0]],
       "updated": 1790000000000
@@ -79,3 +79,4 @@ plugins/BriskMap/
 
 - `regions` は出力のあるリージョンの一覧。表示画面は無いリージョンを取りに行かない。
 - `textures` はテクスチャがまだ無いとき `null`（表示画面は色だけで描く）。
+- `extract.maxY` は切断なしなら `null`、切断ありならワールド Y 座標。ネザーの既定値は 100。

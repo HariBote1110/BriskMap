@@ -2,6 +2,7 @@ package io.github.haribote1110.briskmap.paper.config;
 
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -29,8 +30,17 @@ public final class ConfigLoader {
             worlds = list.stream().map(String.class::cast).toList();
         } else if (excluded != null) warning.accept("Invalid worlds.exclude; using default");
         boolean download = bool(values, warning, "textures.accept-mojang-download", false);
+        Map<String, Object> cuts = new HashMap<>();
+        Object configuredMaps = values.apply("maps");
+        if (configuredMaps instanceof Map<?, ?> entries) {
+            for (var entry : entries.entrySet()) if (entry.getKey() instanceof String name) {
+                Object world = entry.getValue();
+                if (world instanceof Map<?, ?> worldValues) cuts.put(name, worldValues.get("max-y"));
+            }
+        } else if (configuredMaps != null) warning.accept("Invalid maps; using defaults");
+        cuts.values().removeIf(java.util.Objects::isNull);
         return new BriskMapConfig(web, bind, port, webThreads, threads, caves, fluids,
-                compression, interval, worlds, download);
+                compression, interval, worlds, download, cuts);
     }
 
     private static boolean bool(Function<String, ?> values, Consumer<String> warning, String key, boolean fallback) {

@@ -125,6 +125,7 @@ class ViewerEngine {
     this.disposed=false;
     this.loadedChunks=new Map();
     this.skippedChunks=new Set();
+    this.emptyChunks=new Set();
     this.pendingChunks=new Set();
     this.selectedChunks=[];
     this.selectedChunkKeys=new Set();
@@ -296,7 +297,7 @@ class ViewerEngine {
     this.pool.cancelQueued(()=>true);
     this.pool.clearPalettes();
     this.renderer3d.clear();this.renderer2d.clear();
-    this.loadedChunks=new Map();this.skippedChunks=new Set();this.pendingChunks=new Set();
+    this.loadedChunks=new Map();this.skippedChunks=new Set();this.emptyChunks=new Set();this.pendingChunks=new Set();
     this.pending2d=new Set();this.failed2d=new Set();this.edges2d=new Map();
     this.statusData.mode=this.view.mode;
     this.statusData.phase='loading';
@@ -352,7 +353,7 @@ class ViewerEngine {
   }
   update3dProgress(){
     let ready=0,regions=0;
-    for(const chunks of this.groups3d?.values()??[]){let complete=true;for(const chunk of chunks){const key=chunkKey(chunk.cx,chunk.cz);if(this.loadedChunks.has(key))ready++;else if(!this.skippedChunks.has(key))complete=false;}if(complete)regions++;}
+    for(const chunks of this.groups3d?.values()??[]){let complete=true;for(const chunk of chunks){const key=chunkKey(chunk.cx,chunk.cz);if(this.loadedChunks.has(key)||this.emptyChunks.has(key))ready++;else complete=false;}if(complete)regions++;}
     this.statusData.chunksReady=ready;
     this.statusData.regionsLoaded=regions;
     this.stats.chunks_loaded=ready;
@@ -380,7 +381,7 @@ class ViewerEngine {
       for(const chunk of chunks){
         const key=chunkKey(chunk.cx,chunk.cz),compressed=loaded.payloads.get(chunk.index);
         if(!this.selectedChunkKeys.has(key)){pending.delete(key);continue;}
-        if(!compressed){this.skippedChunks.add(key);pending.delete(key);continue;}
+        if(!compressed){this.skippedChunks.add(key);this.emptyChunks.add(key);pending.delete(key);continue;}
         const promise=this.pool.run('mesh',{paletteKey:palette.key,cx:chunk.cx,cz:chunk.cz,compressed},{palette,transfer:[compressed.buffer],tag:key}).then(data=>{
           pending.delete(key);
           if(epoch!==this.epoch||!this.selectedChunkKeys.has(key))return;
@@ -398,6 +399,7 @@ class ViewerEngine {
       }
       this.stats.t_fetch_done_ms=performance.now();
       this.update3dProgress();
+      this.drawSoon();
       await Promise.all(tasks);
     }catch(error){
       for(const chunk of chunks){const key=chunkKey(chunk.cx,chunk.cz);pending.delete(key);if(epoch===this.epoch)this.skippedChunks.add(key);}
@@ -472,7 +474,7 @@ class ViewerEngine {
       :this.visibleRegionKeys.every(key=>this.renderer2d.regions.has(key)||this.failed2d.has(key));
     if(!processed)return;
     const complete=this.view.mode==='3d'
-      ?this.selectedChunks.every(item=>this.loadedChunks.has(chunkKey(item.cx,item.cz)))
+      ?this.selectedChunks.every(item=>{const key=chunkKey(item.cx,item.cz);return this.loadedChunks.has(key)||this.emptyChunks.has(key);})
       :this.visibleRegionKeys.every(key=>this.renderer2d.regions.has(key));
     const changed=this.statusData.phase!=='ready'||(typeof window!=='undefined'&&window.__briskReady!==complete);
     this.statusData.phase='ready';

@@ -150,7 +150,7 @@ public final class ExtractionService implements AutoCloseable {
                 Object lock = REGION_LOCKS.computeIfAbsent(input.toAbsolutePath().normalize(), ignored -> new Object());
                 synchronized (lock) {
                     if (rebuild) deleteOutputs(state.target.outDir(), name);
-                    result = update.update(input, state.target.outDir(), options);
+                    result = update.update(input, state.target.outDir(), options.withMaxY(state.target.maxY()));
                 }
                 synchronized (state) {
                     state.done.add(name);
