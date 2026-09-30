@@ -1,11 +1,12 @@
 import { decode2d, decode3d } from './format.mjs';
 import { rasteriseRegion } from './map2d.mjs';
 import { loadMesher } from './wasm.mjs';
+import { meshChunk as meshJs } from './mesh-js.mjs';
 
 const palettes = new Map();
-const mesherPromise=loadMesher();
-mesherPromise.then(()=>self.postMessage({type:'ready'}),()=>{});
-async function inflate(bytes) {
+const mesherPromise=loadMesher().catch(()=>null);
+mesherPromise.then(()=>self.postMessage({type:'ready'}));
+async function streamInflate(bytes) {
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
@@ -23,17 +24,21 @@ self.onmessage = async ({data}) => {
       if (!palette) throw new Error(`Missing palette ${data.paletteKey}`);
       const mesher=await mesherPromise;
       const inflateStart=performance.now();
-      const raw=await inflate(data.compressed);
+      const raw=mesher ? mesher.inflateRaw(data.compressed) : await streamInflate(data.compressed);
       const inflateMs=performance.now()-inflateStart;
       const chunk=decode3d(raw,{palette:{length:palette.paletteLength}});
       const meshStart=performance.now();
-      const output=mesher.meshChunk({...chunk,materials:palette.materials},'greedy');
+      const output=mesher ? mesher.meshChunk({...chunk,materials:palette.materials},'greedy') : meshJs({...chunk,materials:palette.materials},'greedy');
       const meshMs=performance.now()-meshStart;
       self.postMessage({id:data.id,type:'mesh',cx:data.cx,cz:data.cz,vertices:output.vertices,indices:output.indices,quads:output.quads,inflateMs,meshMs},[output.vertices.buffer,output.indices.buffer]);
     } else if (data.type === 'raster') {
+      const mesher=await mesherPromise;
       const header={palette:{length:data.paletteLength},biomes:{length:data.biomeLength}};
       const chunks=[];
-      for (const item of data.chunks) chunks.push({index:item.index,columns:decode2d(await inflate(item.compressed),header)});
+      for (const item of data.chunks) {
+        const raw=mesher ? mesher.inflateRaw(item.compressed) : await streamInflate(item.compressed);
+        chunks.push({index:item.index,columns:decode2d(raw,header)});
+      }
       const northRow={heights:new Int16Array(512).fill(-32768),blocks:new Uint32Array(512),waters:new Uint8Array(512)};
       const southHeights=new Int16Array(512).fill(-32768);
       for(const {index,columns} of chunks){

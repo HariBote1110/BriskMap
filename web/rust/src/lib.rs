@@ -1,4 +1,5 @@
 use std::sync::{Mutex, OnceLock};
+mod inflate;
 
 const VOLUME: usize = 16 * 384 * 16;
 const WORDS_PER_FACE: usize = VOLUME / 32;
@@ -311,6 +312,19 @@ pub extern "C" fn alloc(len: usize) -> *mut u8 {
 pub unsafe extern "C" fn dealloc(ptr: *mut u8, len: usize) {
     if !ptr.is_null() {
         drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn inflate_raw(input_ptr: *const u8, input_len: usize, output_ptr: *mut u32, output_len: *mut u32) -> u32 {
+    if input_ptr.is_null() || output_ptr.is_null() || output_len.is_null() { return 1; }
+    let input = std::slice::from_raw_parts(input_ptr, input_len);
+    match inflate::inflate(input) {
+        Ok(bytes) => {
+            *output_len = bytes.len() as u32;
+            *output_ptr = Box::into_raw(bytes.into_boxed_slice()) as *mut u8 as u32;
+            0
+        }
+        Err(code) => code,
     }
 }
 fn descriptor(vertices: Vec<u8>, indices: Vec<u8>, quads: u32, error: u32) -> *mut u8 {

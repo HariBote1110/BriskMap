@@ -8,6 +8,28 @@ export async function loadMesher(url = defaultUrl) {
   } else bytes = await (await fetch(url)).arrayBuffer();
   const { instance } = await WebAssembly.instantiate(bytes);
   const wasm = instance.exports;
+  function inflateRaw(bytes) {
+    if (!(bytes instanceof Uint8Array)) throw new TypeError('Expected Uint8Array');
+    const input = wasm.alloc(bytes.byteLength);
+    const result = wasm.alloc(8);
+    if (!input || !result) {
+      if (input) wasm.dealloc(input, bytes.byteLength);
+      if (result) wasm.dealloc(result, 8);
+      throw new Error('WASM allocation failed');
+    }
+    try {
+      new Uint8Array(wasm.memory.buffer, input, bytes.byteLength).set(bytes);
+      const status = wasm.inflate_raw(input, bytes.byteLength, result, result + 4);
+      if (status) throw new Error(`WASM inflate error ${status}`);
+      const view = new DataView(wasm.memory.buffer, result, 8);
+      const pointer = view.getUint32(0, true), length = view.getUint32(4, true);
+      try { return new Uint8Array(wasm.memory.buffer, pointer, length).slice(); }
+      finally { wasm.dealloc(pointer, length); }
+    } finally {
+      wasm.dealloc(input, bytes.byteLength);
+      wasm.dealloc(result, 8);
+    }
+  }
   function meshChunk({ positions, paletteIndices, masks, materials }, mode = 'culled') {
     if (mode !== 'culled' && mode !== 'greedy') throw new Error(`Unknown mode: ${mode}`);
     if (positions.length !== paletteIndices.length || positions.length !== masks.length) throw new Error('Mismatched input lengths');
@@ -37,5 +59,5 @@ export async function loadMesher(url = defaultUrl) {
       return { vertices, indices, quads };
     } finally { for (let i = 0; i < pointers.length; i++) wasm.dealloc(pointers[i], inputs[i].byteLength); }
   }
-  return { meshChunk };
+  return { meshChunk, inflateRaw };
 }
