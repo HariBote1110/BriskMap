@@ -10,7 +10,7 @@ import { resolveMaterials, syntheticMaterials } from '../../src/engine/materials
 
 function options(args) {
   const value = name => { const at = args.indexOf(name); return at < 0 ? undefined : args[at + 1]; };
-  const result = { blocks: value('--blocks'), data: value('--data'), regions: Number(value('--regions') ?? Infinity), impl: value('--impl') ?? 'js', mode: value('--mode') ?? 'culled', warmup: Number(value('--warmup') ?? 2), passes: Number(value('--passes') ?? 5), hash: args.includes('--hash') };
+  const result = { blocks: value('--blocks'), data: value('--data'), regions: Number(value('--regions') ?? Infinity), impl: value('--impl') ?? 'js', mode: value('--mode') ?? 'culled', warmup: Number(value('--warmup') ?? 2), passes: Number(value('--passes') ?? 5), hash: args.includes('--hash'), inflateOnly: args.includes('--inflate-only') };
   if (!result.data || !['js', 'wasm'].includes(result.impl) || !['culled', 'greedy'].includes(result.mode) || result.regions < 1 || !Number.isInteger(result.warmup) || result.warmup < 0 || !Number.isInteger(result.passes) || result.passes < 1) throw new Error('Use --data DIR [--regions N] [--blocks FILE] [--impl js|wasm] [--mode culled|greedy] [--warmup 2] [--passes 5]');
   return result;
 }
@@ -18,10 +18,44 @@ const median = values => { const ordered = [...values].sort((a, b) => a - b); re
 const percentile = (values, proportion) => { if (!values.length) return 0; const ordered = [...values].sort((a, b) => a - b); return ordered[Math.ceil(proportion * ordered.length) - 1]; };
 const popcount = mask => { let count = 0; while (mask) { count += mask & 1; mask >>>= 1; } return count; };
 
+function compressedChunks(bytes) {
+  let at = 16;
+  const varint = () => { let value = 0, shift = 0, byte; do { byte = bytes[at++]; value += (byte & 127) * 2 ** shift; shift += 7; } while (byte & 128); return value; };
+  const strings = () => { for (let count = varint(); count > 0; count--) { const length = varint(); at += length; } };
+  strings();
+  if (bytes[5] === 1) strings();
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), chunks = [];
+  for (let i = 0; i < 1024; i++) {
+    const start = view.getUint32(at + i * 8), length = view.getUint32(at + i * 8 + 4);
+    if (length) chunks.push(bytes.subarray(start, start + length));
+  }
+  return chunks;
+}
+
+async function benchmarkInflate(files, config) {
+  const chunks = (await Promise.all(files.map(async file => compressedChunks(await readFile(join(config.data, file)))))).flat();
+  const wasm = (await loadMesher()).inflateRaw;
+  const measure = inflate => {
+    const passes = [];
+    for (let pass = 0; pass < config.warmup + config.passes; pass++) {
+      let bytes = 0;
+      const start = performance.now();
+      for (const chunk of chunks) bytes += inflate(chunk).byteLength;
+      const elapsed = performance.now() - start;
+      if (pass >= config.warmup) passes.push(elapsed);
+      if (!bytes) throw new Error('No inflated bytes');
+    }
+    return { median: median(passes), passes };
+  };
+  const zlib = measure(inflateRawSync), wasmTime = measure(wasm);
+  console.log(JSON.stringify({ chunks: chunks.length, compressed_bytes: chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0), warmup: config.warmup, passes: config.passes, zlib_inflate_ms_median: zlib.median, wasm_inflate_ms_median: wasmTime.median, ratio: wasmTime.median / zlib.median, zlib_passes_ms: zlib.passes, wasm_passes_ms: wasmTime.passes, node: process.version }));
+}
+
 async function main() {
   const config = options(process.argv.slice(2));
   const files = (await readdir(config.data)).filter(name => name.endsWith('.b3d')).sort().slice(0, config.regions);
   if (!files.length) throw new Error('No .b3d region files found');
+  if (config.inflateOnly) return benchmarkInflate(files, config);
   const materialTable = config.blocks ? JSON.parse(await readFile(config.blocks, 'utf8')) : null;
   const all = []; let shellBlocks = 0, facesIn = 0;
   const decodeStart = performance.now();
