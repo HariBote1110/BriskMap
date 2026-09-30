@@ -6,7 +6,7 @@ import { parseHeader, decode2d } from '../../src/engine/format.mjs';
 import { meanLayers, rasteriseRegion, regionColours, shadeNorthRow } from '../../src/engine/map2d.mjs';
 import { flatMaterials } from '../../src/engine/materials.mjs';
 import { colourFor } from '../../src/engine/colour.mjs';
-import { keyView, wheelScale, normaliseView } from '../../src/engine/view.mjs';
+import { keyMotion, zoomView, normaliseView } from '../../src/engine/view.mjs';
 import { WorkerPool } from '../../src/engine/worker-pool.mjs';
 import { createViewer } from '../../src/engine/index.mjs';
 
@@ -41,12 +41,12 @@ test('flat materials assign one FNV colour per block name', () => {
 
 test('keyboard and wheel gesture maths keep the view within its limits', () => {
   const three = normaliseView([0,64,0], 'world', '3d');
-  assert.ok(keyView(three, 'ArrowUp').z < three.z);
-  assert.ok(keyView(three, 'KeyE').yaw > three.yaw);
-  assert.equal(wheelScale(three, 1e6).distance, 1024);
+  assert.ok(keyMotion(three, ['forward'], 0.1).z < three.z);
+  assert.ok(keyMotion(three, ['turnRight'], 0.1).yaw > three.yaw);
+  assert.equal(zoomView(three, 800, 600, null, 0).distance, 1024);
   const two = normaliseView([0,64,0], 'world', '2d', {zoom: 1/16});
-  assert.ok(keyView(two, 'ArrowLeft').x < two.x);
-  assert.equal(wheelScale(two, 1e6).zoom, 1/16);
+  assert.ok(keyMotion(two, ['left'], 0.1).x < two.x);
+  assert.equal(zoomView(two, 800, 600, null, 0).zoom, 1/16);
 });
 
 test('queued stale worker results are cancelled before dispatch', async () => {
