@@ -2,7 +2,7 @@ subprojects {
     apply(plugin = "java-library")
 
     group = "io.github.haribote1110.briskmap"
-    version = "0.1.0-Alpha-1a"
+    version = "0.1.0-Alpha-1b"
 
     repositories {
         mavenCentral()

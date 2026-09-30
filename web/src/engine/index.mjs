@@ -126,6 +126,7 @@ class ViewerEngine {
     this.loadedChunks=new Map();
     this.skippedChunks=new Set();
     this.emptyChunks=new Set();
+    this.loadedRegionHeaders=new Set();
     this.pendingChunks=new Set();
     this.selectedChunks=[];
     this.selectedChunkKeys=new Set();
@@ -297,7 +298,7 @@ class ViewerEngine {
     this.pool.cancelQueued(()=>true);
     this.pool.clearPalettes();
     this.renderer3d.clear();this.renderer2d.clear();
-    this.loadedChunks=new Map();this.skippedChunks=new Set();this.emptyChunks=new Set();this.pendingChunks=new Set();
+    this.loadedChunks=new Map();this.skippedChunks=new Set();this.emptyChunks=new Set();this.pendingChunks=new Set();this.loadedRegionHeaders=new Set();
     this.pending2d=new Set();this.failed2d=new Set();this.edges2d=new Map();
     this.statusData.mode=this.view.mode;
     this.statusData.phase='loading';
@@ -325,7 +326,7 @@ class ViewerEngine {
     this.notifyStatus();
   }
   refresh3d(){
-    const radius=this.radius(),selected=selectChunks(this.view.x,this.view.z,radius,this.map.regions);
+    const radius=this.radius(),selected=selectChunks(this.view.x,this.view.z,radius);
     this.selectedChunks=selected;
     this.selectedChunkKeys=new Set(selected.map(item=>chunkKey(item.cx,item.cz)));
     this.pool.cancelQueued(task=>task.type==='mesh'&&!this.selectedChunkKeys.has(task.tag));
@@ -334,6 +335,12 @@ class ViewerEngine {
     for(const chunk of selected){const key=regionKey(chunk.rx,chunk.rz);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(chunk);}
     this.groups3d=groups;
     this.stats.regions=groups.size;
+    const available=new Set((this.map.regions??[]).map(([rx,rz])=>regionKey(rx,rz)));
+    for(const [region,chunks] of groups)if(!available.has(region))for(const chunk of chunks){
+      const key=chunkKey(chunk.cx,chunk.cz);
+      this.emptyChunks.add(key);
+      this.skippedChunks.add(key);
+    }
     for(const [key,item] of this.loadedChunks){
       const dx=Math.max(item.cx*16-this.view.x,0,this.view.x-(item.cx+1)*16);
       const dz=Math.max(item.cz*16-this.view.z,0,this.view.z-(item.cz+1)*16);
@@ -344,6 +351,7 @@ class ViewerEngine {
     this.update3dProgress();
     const pending=this.pendingChunks,epoch=this.epoch;
     for(const [region,chunks] of groups){
+      if(!available.has(region))continue;
       const needed=chunks.filter(item=>{const key=chunkKey(item.cx,item.cz);return !this.loadedChunks.has(key)&&!this.skippedChunks.has(key)&&!pending.has(key);});
       if(!needed.length)continue;
       for(const item of needed)pending.add(chunkKey(item.cx,item.cz));
@@ -353,7 +361,11 @@ class ViewerEngine {
   }
   update3dProgress(){
     let ready=0,regions=0;
-    for(const chunks of this.groups3d?.values()??[]){let complete=true;for(const chunk of chunks){const key=chunkKey(chunk.cx,chunk.cz);if(this.loadedChunks.has(key)||this.emptyChunks.has(key))ready++;else complete=false;}if(complete)regions++;}
+    const available=new Set((this.map.regions??[]).map(([rx,rz])=>regionKey(rx,rz)));
+    for(const [region,chunks] of this.groups3d??[]){
+      if(!available.has(region)||this.loadedRegionHeaders.has(region))regions++;
+      for(const chunk of chunks){const key=chunkKey(chunk.cx,chunk.cz);if(this.loadedChunks.has(key)||this.emptyChunks.has(key))ready++;}
+    }
     this.statusData.chunksReady=ready;
     this.statusData.regionsLoaded=regions;
     this.stats.chunks_loaded=ready;
@@ -373,6 +385,8 @@ class ViewerEngine {
       });
       if(!loaded||epoch!==this.epoch)return;
       if(loaded.header.x!==rx||loaded.header.z!==rz)throw new Error(`Region coordinate mismatch: ${region}`);
+      this.loadedRegionHeaders.add(region);
+      this.update3dProgress();
       const texture=await this.loadTexturePromise;
       if(epoch!==this.epoch)return;
       const materials=texture?resolveMaterials(loaded.header.palette,texture.table):this.renderer3d.registerFlatPalette(loaded.header.palette);
@@ -420,7 +434,7 @@ class ViewerEngine {
     this.drawSoon();
   }
   update2dProgress(){
-    this.statusData.regionsLoaded=this.visibleRegionKeys.filter(key=>this.renderer2d.regions.has(key)).length;
+    this.statusData.regionsLoaded=this.visibleRegionKeys.filter(key=>this.loadedRegionHeaders.has(key)).length;
     this.notifyStatus();
   }
   trim2d(){
@@ -447,6 +461,8 @@ class ViewerEngine {
       });
       if(!loaded||epoch!==this.epoch)return;
       if(loaded.header.x!==rx||loaded.header.z!==rz)throw new Error(`Region coordinate mismatch: ${key}`);
+      this.loadedRegionHeaders.add(key);
+      this.update2dProgress();
       this.stats.t_fetch_done_ms=performance.now();
       const texture=await this.loadTexturePromise;
       if(epoch!==this.epoch)return;

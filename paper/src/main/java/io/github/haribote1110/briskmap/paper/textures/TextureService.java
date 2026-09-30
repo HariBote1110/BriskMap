@@ -109,8 +109,10 @@ public final class TextureService {
     private boolean ready(Path folder) throws IOException {
         if (!Files.isRegularFile(folder.resolve("atlas.png")) || !Files.isRegularFile(folder.resolve("blocks.json"))) return false;
         try {
-            Object source = Json.object(Json.parse(Files.readString(folder.resolve("blocks.json")))).get("source");
-            return ("minecraft-client-" + version + ".jar").equals(source);
+            var document = Json.object(Json.parse(Files.readString(folder.resolve("blocks.json"))));
+            return ("minecraft-client-" + version + ".jar").equals(document.get("source"))
+                    && document.get("generator") instanceof Long generator
+                    && generator == TextureBuilder.GENERATOR;
         } catch (IllegalArgumentException exception) { return false; }
     }
 

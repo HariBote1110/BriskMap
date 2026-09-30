@@ -20,6 +20,8 @@ import java.util.zip.ZipFile;
 
 /** Builds the atlas and block material table from a Minecraft client jar. */
 public final class TextureBuilder {
+    // Bump this whenever the generated atlas or block table semantics change.
+    public static final int GENERATOR = 2;
     private TextureBuilder() { }
     public record Summary(int blocks, int entries, int unknown, int fallback, int layers, int atlasBytes, long ms) { }
 
@@ -63,7 +65,7 @@ public final class TextureBuilder {
             for (int i = 0; i < worker.layers.size(); i++) System.arraycopy(worker.layers.get(i), 0, pixels, i * 1024, 1024);
             byte[] atlas = Png.encode(16, worker.layers.size() * 16, pixels);
             Map<String,Object> document = new LinkedHashMap<>();
-            document.put("format", 1); document.put("source", clientJar.getFileName().toString());
+            document.put("format", 1); document.put("generator", GENERATOR); document.put("source", clientJar.getFileName().toString());
             document.put("tile", 16); document.put("layers", worker.layers.size()); document.put("textures", worker.textures);
             document.put("tints", List.of("none", "grass", "foliage", "water", "other")); document.put("blocks", blocks);
             Files.createDirectories(outDir);
