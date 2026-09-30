@@ -156,27 +156,37 @@ export function classifyUrl(viewer, url) {
     if (/\/maps\/[^/]+\/tiles\/[123]\//.test(path)) return 'lowres';
   }
   if (viewer === 'brisk' && path.startsWith('/data/')) return 'data';
+  if (viewer === 'brisk-prod') {
+    // Production map metadata and region files are data; texture assets, UI and engine code, and the root document have separate transfer classes.
+    if (path === '/maps/index.json' || /^\/maps\/[^/]+\/r\.-?\d+\.-?\d+\.b3d$/.test(path)) return 'data';
+    if (path.startsWith('/textures/')) return 'textures';
+    if (path.startsWith('/ui/') || path.startsWith('/engine/')) return 'code';
+    if (path === '/') return 'page';
+  }
   return 'other';
 }
 
 export function argumentsFrom(argv) {
   const options = { scenarios: join(base, 'scenarios.json'), runs: 3, out: join(base, 'results.jsonl'), headless: false,
-    chromeFlags: [], mobile: false, label: null, settleTimeoutMs: 180000, orbitMs: 10000 };
+    chromeFlags: [], mobile: false, label: null, settleTimeoutMs: 180000, orbitMs: 10000, briskProdMap: 'world' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--help') { options.help = true; continue; }
     if (arg === '--headless') { options.headless = true; continue; }
     if (arg === '--mobile') { options.mobile = true; continue; }
-    if (!['--chrome', '--scenarios', '--runs', '--out', '--only', '--chrome-flags', '--label', '--settle-timeout-ms', '--orbit-ms'].includes(arg) || argv[i + 1] === undefined) throw new Error(`Unknown or incomplete option: ${arg}`);
+    if (!['--chrome', '--scenarios', '--runs', '--out', '--only', '--chrome-flags', '--label', '--settle-timeout-ms', '--orbit-ms', '--brisk-prod-url', '--brisk-prod-map'].includes(arg) || argv[i + 1] === undefined) throw new Error(`Unknown or incomplete option: ${arg}`);
     const value = argv[++i];
     if (arg === '--chrome-flags') options.chromeFlags = value.trim() ? value.trim().split(/\s+/) : [];
     else if (arg === '--settle-timeout-ms') options.settleTimeoutMs = Number(value);
     else if (arg === '--orbit-ms') options.orbitMs = Number(value);
+    else if (arg === '--brisk-prod-url') options.briskProdUrl = value;
+    else if (arg === '--brisk-prod-map') options.briskProdMap = value;
     else options[arg.slice(2)] = value;
   }
   options.runs = Number(options.runs);
   if (!options.help && (!options.chrome || !Number.isInteger(options.runs) || options.runs < 1)) throw new Error('Use --chrome BIN and --runs positive integer');
-  if (options.only && (!/^(bluemap|brisk):[^:]+:[^:]+$/.test(options.only))) throw new Error('Use --only viewer:case:scenario');
+  if (options.only && (!/^(bluemap|brisk|brisk-prod):[^:]+:[^:]+$/.test(options.only))) throw new Error('Use --only viewer:case:scenario');
+  if (options.only?.startsWith('brisk-prod:') && !options.briskProdUrl) throw new Error('Use --brisk-prod-url for brisk-prod');
   if (![options.settleTimeoutMs, options.orbitMs].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('Timeout and orbit durations must be positive integers');
   return options;
 }
@@ -186,7 +196,7 @@ export function invalidReasons(result, { screenshotFailed = false, briskReady = 
   if (result.timed_out) reasons.push('timed_out');
   if (screenshotFailed) reasons.push('screenshot_failed');
   if (result.orbit?.frames === 0) reasons.push('orbit_no_frames');
-  if (result.viewer === 'brisk') {
+  if (result.viewer === 'brisk' || result.viewer === 'brisk-prod') {
     if (!briskReady) reasons.push('brisk_not_ready');
     if (briskError) reasons.push('brisk_error');
   }
@@ -197,14 +207,22 @@ export function invalidReasons(result, { screenshotFailed = false, briskReady = 
   return reasons;
 }
 
-function pageUrl(viewer, scenario, setting, y) {
+export function pageUrl(viewer, scenario, setting, y, { briskProdUrl, briskProdMap = 'world' } = {}) {
   const { distance, rotation, angle } = scenario;
   if (viewer === 'bluemap') return `http://192.168.0.175:8100/#overworld:0:${y}:0:${distance}:${rotation}:${angle}:0:0:perspective`;
+  if (viewer === 'brisk-prod') {
+    const url = new URL('/', briskProdUrl);
+    url.searchParams.set('radius', String(setting.radius));
+    const yaw = Math.round(rotation * 180 / Math.PI * 10) / 10;
+    const pitch = Math.max(10, Math.min(89, 90 - angle * 180 / Math.PI));
+    url.hash = new URLSearchParams({ map: briskProdMap, mode: '3d', x: '0', z: '0', y: String(y), yaw: String(yaw), pitch: String(pitch), d: String(distance) }).toString();
+    return url.toString();
+  }
   const query = new URLSearchParams({ x: '0', y: String(y), z: '0', distance: String(distance), rotation: String(rotation), angle: String(angle), radius: String(setting.radius), workers: '4', data: '/data/' });
   return `http://192.168.0.175:8200/viewer/index.html?${query}`;
 }
 
-export async function runOne({ viewer, caseName, scenarioName, runNumber, scenario, setting, chrome, headless, chromeFlags = [], mobile = false, label = null, settleTimeoutMs = 180000, orbitMs = 10000, out, targetY, url, append = true, launch = launchChrome }) {
+export async function runOne({ viewer, caseName, scenarioName, runNumber, scenario, setting, chrome, headless, chromeFlags = [], mobile = false, label = null, settleTimeoutMs = 180000, orbitMs = 10000, out, targetY, url, briskProdUrl, briskProdMap, append = true, launch = launchChrome }) {
   const browser = await launch(chrome, { headless, chromeFlags, mobile });
   try {
     const { client, child, version } = browser;
@@ -294,7 +312,7 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
     }
     const cpuStart = sampleCpu(child.pid);
     navigationAt = Date.now();
-    await client.send('Page.navigate', { url: url ?? pageUrl(viewer, scenario, setting, targetY) });
+    await client.send('Page.navigate', { url: url ?? pageUrl(viewer, scenario, setting, targetY, { briskProdUrl, briskProdMap }) });
     let settled = { settled: false, timedOut: false };
     let page = {};
     let error;
@@ -303,10 +321,11 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
       try {
         page = await client.evaluate(`({longTasks: window.__longTasks || [], ready: window.__briskReady === true, error: window.__briskError || null, stats: window.__briskStats || null})`) ?? {};
       } catch (cause) { error = String(cause); }
-      briskReady ||= page.ready === true;
+      const ready = page.ready === true && (viewer !== 'brisk-prod' || page.stats != null);
+      briskReady ||= ready;
       const longTaskEvents = (page.longTasks ?? []).map(task => ({ kind: 'longtask', at: navigationAt + task.start, end: navigationAt + task.start + task.duration }));
       const upload = page.stats?.t_upload_done_ms;
-      settled = detectSettle([...events, ...longTaskEvents], { now: Date.now(), start: navigationAt, ready: viewer === 'bluemap' || page.ready, timeoutMs: settleTimeoutMs, uploadDoneAt: Number.isFinite(upload) ? navigationAt + upload : navigationAt });
+      settled = detectSettle([...events, ...longTaskEvents], { now: Date.now(), start: navigationAt, ready: viewer === 'bluemap' || ready, timeoutMs: settleTimeoutMs, uploadDoneAt: Number.isFinite(upload) ? navigationAt + upload : navigationAt });
       if (settled.settled || settled.timedOut || page.error || attachmentError) break;
       await sleep(100);
     }
@@ -382,7 +401,7 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
       js_heap_used_mb: heapMb, long_tasks_count: page.longTasks?.length ?? 0,
       long_tasks_total_ms: (page.longTasks ?? []).reduce((sum, task) => sum + task.duration, 0),
       orbit, cpu_ms_orbit_total: orbitCpu.total, cpu_ms_orbit_by_type: orbitCpu.byType,
-      ...(viewer === 'brisk' ? { brisk_stats: page.stats } : { bluemap_view_distances: distances ?? null }),
+      ...(viewer === 'bluemap' ? { bluemap_view_distances: distances ?? null } : { brisk_stats: page.stats }),
       chrome_version: version.Browser, user_agent: version['User-Agent'], started_at: new Date(navigationAt).toISOString(),
       ...(error || page.error || settled.timedOut || networkErrors ? { error: error ?? page.error ?? (settled.timedOut ? 'Settle timeout' : `${networkErrors} network requests failed`) } : {}),
       ...(frameNavigatedAt ? { frame_navigated_at: new Date(frameNavigatedAt).toISOString() } : {}),
@@ -397,7 +416,7 @@ export async function runOne({ viewer, caseName, scenarioName, runNumber, scenar
 
 export async function main(argv = process.argv.slice(2)) {
   const options = argumentsFrom(argv);
-  if (options.help) { console.log('Usage: node run.mjs --chrome <binary> --scenarios scenarios.json --runs 3 --out results.jsonl [--only viewer:case:scenario] [--headless] [--chrome-flags "<space-separated flags>"] [--mobile] [--label <text>] [--settle-timeout-ms <n>] [--orbit-ms <n>]'); return; }
+  if (options.help) { console.log('Usage: node run.mjs --chrome <binary> --scenarios scenarios.json --runs 3 --out results.jsonl [--only viewer:case:scenario] [--brisk-prod-url <base>] [--brisk-prod-map <id>] [--headless] [--chrome-flags "<space-separated flags>"] [--mobile] [--label <text>] [--settle-timeout-ms <n>] [--orbit-ms <n>]'); return; }
   const configuration = JSON.parse(readFileSync(resolve(options.scenarios), 'utf8'));
   mkdirSync(dirname(resolve(options.out)), { recursive: true });
   const only = options.only?.split(':');
@@ -406,12 +425,16 @@ export async function main(argv = process.argv.slice(2)) {
       for (let runNumber = 1; runNumber <= options.runs; runNumber++) {
         if (only && (only[1] !== caseName || only[2] !== scenarioName)) continue;
         const common = { caseName, scenarioName, runNumber, scenario, setting, chrome: options.chrome, headless: options.headless, chromeFlags: options.chromeFlags, mobile: options.mobile, label: options.label, settleTimeoutMs: options.settleTimeoutMs, orbitMs: options.orbitMs, out: options.out };
-        if (setting.radius === undefined && only?.[0] === 'brisk') continue;
+        if (setting.radius === undefined && (only?.[0] === 'brisk' || only?.[0] === 'brisk-prod')) continue;
         const blue = await runOne({ ...common, viewer: 'bluemap', targetY: 70, append: !only || only[0] === 'bluemap' });
         if (!only || only[0] === 'bluemap') console.log(JSON.stringify(blue));
         if (setting.radius !== undefined && (!only || only[0] === 'brisk')) {
           const brisk = await runOne({ ...common, viewer: 'brisk', targetY: blue.target.y });
           console.log(JSON.stringify(brisk));
+        }
+        if (options.briskProdUrl && setting.radius !== undefined && (!only || only[0] === 'brisk-prod')) {
+          const production = await runOne({ ...common, viewer: 'brisk-prod', targetY: blue.target.y, briskProdUrl: options.briskProdUrl, briskProdMap: options.briskProdMap });
+          console.log(JSON.stringify(production));
         }
       }
     }
