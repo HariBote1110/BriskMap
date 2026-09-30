@@ -25,6 +25,59 @@ import org.junit.jupiter.api.Assumptions;
 class IncrementalTest {
     private static final ExtractOptions OPTIONS = new ExtractOptions(false, true, 6, true, true);
 
+    @Test void sideChangeReextractsExactlyThreeDependentChunksWithBoundedCaves() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "bounded-seam-");
+        Path own = dir.resolve("r.0.0.mca"), east = dir.resolve("r.1.0.mca");
+        Path updated = dir.resolve("updated"), fresh = dir.resolve("fresh");
+        byte[][] ownChunks = new byte[1024][], eastChunks = new byte[1024][];
+        int[] ownStamps = new int[1024], eastStamps = new int[1024];
+        for (int z = 10; z <= 12; z++) {
+            ownChunks[z * 32 + 31] = chunk("minecraft:full", "minecraft:stone", false);
+            ownStamps[z * 32 + 31] = 1;
+        }
+        eastChunks[11 * 32] = chunk("minecraft:full", "minecraft:stone", false);
+        eastStamps[11 * 32] = 1;
+        writeRegion(own, ownChunks, ownStamps); writeRegion(east, eastChunks, eastStamps);
+        ExtractOptions options = new ExtractOptions(true, true, 6, true, true);
+        RegionExtractor.extract(own, updated, options);
+        Reader before = new Reader(updated.resolve("r.0.0.b3d"));
+        assertEquals(0, mask(before.read3d(11 * 32 + 31), 8, 8, 15) & 2);
+        eastChunks[11 * 32] = chunk("minecraft:full", "minecraft:glass", false);
+        eastStamps[11 * 32] = 2;
+        writeRegion(east, eastChunks, eastStamps);
+        assertEquals(3, RegionExtractor.update(own, updated, options).chunksExtracted());
+        Reader after = new Reader(updated.resolve("r.0.0.b3d"));
+        assertTrue((mask(after.read3d(11 * 32 + 31), 8, 8, 15) & 2) != 0);
+        RegionExtractor.extract(own, fresh, options);
+        Reader reference = new Reader(fresh.resolve("r.0.0.b3d"));
+        for (int z = 10; z <= 12; z++) compare3d(after, reference, z * 32 + 31);
+    }
+
+    @Test void diagonalTimestampReextractsTheDependentCorner() throws Exception {
+        Path dir = Files.createTempDirectory(Path.of("core/build"), "diagonal-seam-");
+        Path own = dir.resolve("r.0.0.mca"), diagonal = dir.resolve("r.1.1.mca");
+        Path updated = dir.resolve("updated"), fresh = dir.resolve("fresh");
+        byte[][] ownChunks = new byte[1024][], diagonalChunks = new byte[1024][];
+        int[] ownStamps = new int[1024], diagonalStamps = new int[1024];
+        ownChunks[1023] = chunk("minecraft:full", "minecraft:stone", false); ownStamps[1023] = 1;
+        diagonalChunks[0] = chunk("minecraft:full", "minecraft:stone", false); diagonalStamps[0] = 1;
+        writeRegion(own, ownChunks, ownStamps);
+        writeRegion(diagonal, diagonalChunks, diagonalStamps);
+        ExtractOptions options = new ExtractOptions(true, true, 6, true, true);
+        RegionExtractor.extract(own, updated, options);
+        Reader first = new Reader(updated.resolve("r.0.0.b3d"));
+        assertEquals(1, first.adjacentTimestamps[131]);
+        diagonalChunks[0] = chunk("minecraft:full", "minecraft:glass", false);
+        diagonalStamps[0] = 2;
+        writeRegion(diagonal, diagonalChunks, diagonalStamps);
+        RegionResult changed = RegionExtractor.update(own, updated, options);
+        assertEquals(1, changed.chunksExtracted());
+        Reader second = new Reader(updated.resolve("r.0.0.b3d"));
+        assertEquals(2, second.adjacentTimestamps[131]);
+        RegionExtractor.extract(own, fresh, options);
+        compare3d(second, new Reader(fresh.resolve("r.0.0.b3d")), 1023);
+    }
+
     @Test void adjacentRegionEdgesOpenFacesAndTrackNeighbourChanges() throws Exception {
         Path dir = Files.createTempDirectory(Path.of("core/build"), "region-seams-");
         Path west = dir.resolve("r.0.0.mca"), east = dir.resolve("r.1.0.mca");
@@ -101,8 +154,8 @@ class IncrementalTest {
         RegionResult rebuilt = RegionExtractor.update(input, out, OPTIONS);
         assertTrue(rebuilt.written());
         assertEquals(1, rebuilt.chunksExtracted());
-        assertEquals(5, new Reader(out.resolve("r.0.0.b2d")).version);
-        assertEquals(5, new Reader(out.resolve("r.0.0.b3d")).version);
+        assertEquals(6, new Reader(out.resolve("r.0.0.b2d")).version);
+        assertEquals(6, new Reader(out.resolve("r.0.0.b3d")).version);
     }
 
     private static int mask(Extracted3d shell, int y, int z, int x) {
@@ -174,11 +227,11 @@ class IncrementalTest {
         timestamps[0] = 7;
         Palette blocks = new Palette();
         blocks.index("minecraft:stone");
-        assertTrue(Format.writeV5IfChanged(file, 2, 0, 0, 0, Short.MAX_VALUE, blocks, null, payloads, timestamps, new long[128]).written());
+        assertTrue(Format.writeV6IfChanged(file, 2, 0, 0, 0, 16, Short.MAX_VALUE, blocks, null, payloads, timestamps, new long[132]).written());
         byte[] before = Files.readAllBytes(file);
         FileTime fixedTime = FileTime.fromMillis(1_700_000_000_000L);
         Files.setLastModifiedTime(file, fixedTime);
-        Format.WriteResult unchanged = Format.writeV5IfChanged(file, 2, 0, 0, 0, Short.MAX_VALUE, blocks, null, payloads, timestamps, new long[128]);
+        Format.WriteResult unchanged = Format.writeV6IfChanged(file, 2, 0, 0, 0, 16, Short.MAX_VALUE, blocks, null, payloads, timestamps, new long[132]);
         assertFalse(unchanged.written());
         assertEquals(before.length, unchanged.bytes());
         assertArrayEquals(before, Files.readAllBytes(file));
@@ -234,7 +287,7 @@ class IncrementalTest {
         byte[] damaged = Files.readAllBytes(file); damaged[4] = 3; Files.write(file, damaged);
         assertThrows(java.io.IOException.class, () -> new Reader(file));
         assertTrue(RegionExtractor.update(input, out, changed).written());
-        assertEquals(5, new Reader(file).version);
+        assertEquals(6, new Reader(file).version);
         damaged = Files.readAllBytes(file); damaged[damaged.length - 1] = 0; Files.write(file, damaged);
         assertTrue(RegionExtractor.update(input, out, changed).written());
         assertEquals(1, new Reader(file).chunkCount());

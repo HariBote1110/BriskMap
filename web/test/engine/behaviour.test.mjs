@@ -14,7 +14,7 @@ const root = new URL('../fixtures-out/overworld/', import.meta.url);
 const textureRoot = new URL('../../../feasibility_research/output/textures/26.3/', import.meta.url);
 function asV4(old) {
   const data=Buffer.alloc(old.length+2);
-  old.copy(data,0,0,16);data[4]=5;data.writeInt16BE(32767,16);old.copy(data,18,16);
+  old.copy(data,0,0,16);data[4]=6;data.writeInt16BE(32767,16);old.copy(data,18,16);
   let at=16;
   const varint=()=>{let value=0,shift=0,byte;do{byte=old[at++];value+=(byte&127)*2**shift;shift+=7;}while(byte&128);return value;};
   const table=()=>{const count=varint();for(let i=0;i<count;i++){const length=varint();at+=length;}};

@@ -56,13 +56,13 @@ class FeatureTest {
         for (boolean hide : new boolean[]{false, true}) for (boolean surface : new boolean[]{false, true}) {
             String flavour = (hide ? "hide" : "keep") + "-" + (surface ? "surface" : "volume");
             Path out = Files.createTempDirectory(Path.of("core/build"), "oracle-");
-            WorldExtractor.extract(in, out, new ExtractOptions(hide, surface, 6, true, true), 2, null, () -> false);
+            WorldExtractor.extract(in, out, new ExtractOptions(hide, surface, 6, true, true).withCaveDepth(0), 2, null, () -> false);
             for (String base : List.of("r.0.0", "r.-1.-1")) for (String extension : List.of("b2d", "b3d")) {
                 Path oldPath = oracle.resolve(flavour).resolve(base + "." + extension);
                 Assumptions.assumeTrue(Files.isRegularFile(oldPath), "Oracle file is absent: " + oldPath);
                 byte[] old = Files.readAllBytes(oldPath), current = Files.readAllBytes(out.resolve(base + "." + extension));
                 assertArrayEquals(Arrays.copyOfRange(old, 0, 4), Arrays.copyOfRange(current, 0, 4));
-                assertEquals(extension.equals("b2d") ? 1 : 2, old[4]); assertEquals(5, current[4]);
+                assertEquals(extension.equals("b2d") ? 1 : 2, old[4]); assertEquals(6, current[4]);
                 assertArrayEquals(Arrays.copyOfRange(old, 5, 14), Arrays.copyOfRange(current, 5, 14));
                 assertEquals((hide ? 1 : 0) | (surface ? 2 : 0), current[14]); assertEquals(0, current[15]);
                 assertEquals(127, current[16]); assertEquals(-1, current[17]);
@@ -83,7 +83,7 @@ class FeatureTest {
                     }
                 }
                 if (extension.equals("b2d")) assertArrayEquals(Arrays.copyOfRange(old, oldTable + 8192, old.length),
-                        Arrays.copyOfRange(current, newTable + 8192, current.length - 4612));
+                        Arrays.copyOfRange(current, newTable + 8192, current.length - 4628));
                 Reader reader = new Reader(out.resolve(base + "." + extension));
                 Region source = new Region(in.resolve(base + ".mca"));
                 for (int i = 0; i < 1024; i++)
@@ -132,8 +132,8 @@ class FeatureTest {
         assertTrue(RegionExtractor.update(input, out, DEFAULT).written());
         byte[] after2 = Files.readAllBytes(out.resolve("r.0.0.b2d"));
         byte[] after3 = Files.readAllBytes(out.resolve("r.0.0.b3d"));
-        assertArrayEquals(Arrays.copyOf(before2, before2.length - 4612), Arrays.copyOf(after2, after2.length - 4612));
-        assertArrayEquals(Arrays.copyOf(before3, before3.length - 4612), Arrays.copyOf(after3, after3.length - 4612));
+        assertArrayEquals(Arrays.copyOf(before2, before2.length - 4628), Arrays.copyOf(after2, after2.length - 4628));
+        assertArrayEquals(Arrays.copyOf(before3, before3.length - 4628), Arrays.copyOf(after3, after3.length - 4628));
     }
 
     private static int tableEnd(byte[] bytes, int at) {

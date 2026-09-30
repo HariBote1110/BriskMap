@@ -201,8 +201,8 @@ public final class ResearchPortTest {
         three[32] = Format.compress(Format.encode3d(shell), compressor);
         long[] timestamps = new long[1024]; timestamps[32] = 1234;
         Path a = dir.resolve("r.0.0.b2d"), b = dir.resolve("r.0.0.b3d");
-        Format.writeV5(a, 1, 0, 0, 3, Short.MAX_VALUE, blocks, biomes, two, timestamps, new long[128]);
-        Format.writeV5(b, 2, 0, 0, 3, Short.MAX_VALUE, blocks, null, three, timestamps, new long[128]);
+        Format.writeV6(a, 1, 0, 0, 3, 0, Short.MAX_VALUE, blocks, biomes, two, timestamps, new long[132]);
+        Format.writeV6(b, 2, 0, 0, 3, 0, Short.MAX_VALUE, blocks, null, three, timestamps, new long[132]);
         Reader r2 = new Reader(a), r3 = new Reader(b);
         Extracted2d got2 = r2.read2d(32); Extracted3d got3 = r3.read3d(32);
         check(Arrays.equals(surface.y, got2.y) && Arrays.equals(surface.block, got2.block) && Arrays.equals(surface.biome, got2.biome) && Arrays.equals(surface.depth, got2.depth), "2d differs");

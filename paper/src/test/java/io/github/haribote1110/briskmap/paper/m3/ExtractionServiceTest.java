@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class ExtractionServiceTest {
     @TempDir Path temp;
 
-    @Test void changedRegionEnqueuesExistingCardinalNeighbours() throws Exception {
+    @Test void changedRegionEnqueuesExistingSideAndCornerNeighbours() throws Exception {
         Path source = Files.createDirectories(temp.resolve("region"));
         for (String name : java.util.List.of("r.0.0.mca", "r.-1.0.mca", "r.1.0.mca", "r.0.-1.mca", "r.0.1.mca", "r.1.1.mca"))
             Files.write(source.resolve(name), new byte[]{1});
@@ -42,9 +42,9 @@ class ExtractionServiceTest {
             Files.setLastModifiedTime(centre, FileTime.fromMillis(Files.getLastModifiedTime(centre).toMillis() + 2000));
             service.scanNow(null);
             assertTrue(service.awaitIdle(10, TimeUnit.SECONDS));
-            assertEquals(java.util.Set.of("r.0.0.mca", "r.-1.0.mca", "r.1.0.mca", "r.0.-1.mca", "r.0.1.mca"), calls.keySet());
+            assertEquals(java.util.Set.of("r.0.0.mca", "r.-1.0.mca", "r.1.0.mca", "r.0.-1.mca", "r.0.1.mca", "r.1.1.mca"), calls.keySet());
             assertEquals(1, calls.get("r.0.0.mca").get());
-            assertFalse(calls.containsKey("r.1.1.mca"));
+            assertEquals(1, calls.get("r.1.1.mca").get());
         }
     }
 

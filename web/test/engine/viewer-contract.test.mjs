@@ -63,7 +63,7 @@ test('onError always supplies fatal and code for drawing and region failures',as
 
 test('empty indexed chunks finish 3D loading',async()=>{
   const data=Buffer.alloc(18+1+8192);
-  data.write('BRSK');data[4]=5;data[5]=2;data.writeInt16BE(32767,16);
+  data.write('BRSK');data[4]=6;data[5]=2;data.writeInt16BE(32767,16);
   await withViewer(async viewer=>{
     await until(()=>window.__briskReady);
     assert.equal(viewer.status.phase,'ready');
@@ -84,7 +84,7 @@ test('a missing indexed region finishes 3D loading',async()=>{
 
 test('status and bench counters agree for present, empty and absent 3D data',async()=>{
   const data=Buffer.alloc(18+1+8192+1);
-  data.write('BRSK');data[4]=5;data[5]=2;data.writeInt16BE(100,16);
+  data.write('BRSK');data[4]=6;data[5]=2;data.writeInt16BE(100,16);
   data.writeUInt32BE(18+1+8192,19);data.writeUInt32BE(1,23);
   data[data.length-1]=0;
   const events=[];
@@ -143,7 +143,7 @@ test('createViewer reuses workers started before the index has loaded',async()=>
 
 test('2D region progress advances when its header is fetched',async()=>{
   const data=Buffer.alloc(18+2+8192);
-  data.write('BRSK');data[4]=5;data[5]=1;
+  data.write('BRSK');data[4]=6;data[5]=1;
   await withViewer(async viewer=>{
     await until(()=>viewer.status.regionsLoaded===viewer.status.regionsTotal);
     assert.ok(viewer.status.regionsTotal>0);

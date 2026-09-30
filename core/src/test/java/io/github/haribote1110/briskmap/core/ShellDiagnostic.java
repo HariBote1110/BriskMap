@@ -27,17 +27,17 @@ public final class ShellDiagnostic {
         Path input = Path.of(arguments[0]);
         BlockDefaults defaults = BlockDefaults.readJson(Path.of(arguments[1]));
         Source source = readSource(input, defaults);
-        BitSet reached = flood(source);
-        for (int i = 2; i < arguments.length; i += 2)
-            report(arguments[i], Path.of(arguments[i + 1]), input, defaults, source, reached);
+        int depth = Integer.parseInt(arguments[2]);
+        BitSet reached = flood(source, depth);
+        for (int i = 3; i < arguments.length; i += 2)
+            report(arguments[i], Path.of(arguments[i + 1]), input, defaults, source, reached, depth);
     }
 
-    private record Source(BitSet nonair, BitSet solid, BitSet water, BitSet lava, int[] top, int[] floor) { }
+    private record Source(BitSet nonair, BitSet solid, BitSet water, BitSet lava, int[] floor) { }
 
     private static Source readSource(Path input, BlockDefaults defaults) throws Exception {
         Source source = new Source(new BitSet(PLANE * HEIGHT), new BitSet(PLANE * HEIGHT),
-                new BitSet(PLANE * HEIGHT), new BitSet(PLANE * HEIGHT), new int[PLANE], new int[PLANE]);
-        Arrays.fill(source.top, -1);
+                new BitSet(PLANE * HEIGHT), new BitSet(PLANE * HEIGHT), new int[PLANE]);
         Inflater inflater = new Inflater();
         Palette palette = new Palette();
         for (int rz = -1; rz <= 0; rz++) for (int rx = -1; rx <= 0; rx++) {
@@ -68,7 +68,6 @@ public final class ShellDiagnostic {
                         int column = (originZ + z) * WIDTH + originX + x;
                         int cell = plane + column;
                         source.nonair.set(cell);
-                        source.top[column] = y;
                         if (solid[block]) source.solid.set(cell);
                         if (fluid[block] == 1) source.water.set(cell);
                         if (fluid[block] == 2) source.lava.set(cell);
@@ -80,51 +79,63 @@ public final class ShellDiagnostic {
         return source;
     }
 
-    private static BitSet flood(Source source) {
-        BitSet reached = new BitSet(PLANE * HEIGHT);
-        int[] frontier = new int[PLANE];
-        int count = 0;
+    private static int floor(Source source, int column) {
+        return Math.max(0, Math.min(383, source.floor[column] - 1));
+    }
+
+    private static final class Frontier {
+        final BitSet reached = new BitSet(PLANE * HEIGHT);
+        int[] cells = new int[PLANE];
+        int count;
+
+        void add(int cell) {
+            if (reached.get(cell)) return;
+            reached.set(cell);
+            if (count == cells.length) cells = Arrays.copyOf(cells, count * 2);
+            cells[count++] = cell;
+        }
+    }
+
+    private static BitSet flood(Source source, int depth) {
+        Frontier frontier = new Frontier();
         for (int column = 0; column < PLANE; column++) {
+            int level = floor(source, column);
+            if (level == 0) continue;
+            int top = (level - 1) * PLANE + column;
+            if (!source.solid.get(top) && !source.solid.get(top + PLANE)) frontier.add(top);
             int x = column % WIDTH, z = column / WIDTH;
-            for (int y = 0; y <= source.top[column]; y++) {
-                int cell = y * PLANE + column;
-                if (source.solid.get(cell)) continue;
-                if (y == source.top[column] || x > 0 && y > source.top[column - 1]
-                        || x + 1 < WIDTH && y > source.top[column + 1]
-                        || z > 0 && y > source.top[column - WIDTH]
-                        || z + 1 < WIDTH && y > source.top[column + WIDTH]) {
-                    reached.set(cell);
-                    if (count == frontier.length) frontier = Arrays.copyOf(frontier, count * 2);
-                    frontier[count++] = cell;
+            for (int direction : new int[]{0, 1, 4, 5}) {
+                int nx = x + DX[direction], nz = z + DZ[direction];
+                if (nx < 0 || nx >= WIDTH || nz < 0 || nz >= WIDTH) continue;
+                int neighbour = nz * WIDTH + nx;
+                for (int y = floor(source, neighbour); y < level; y++) {
+                    int cell = y * PLANE + column;
+                    if (!source.solid.get(cell) && !source.solid.get(y * PLANE + neighbour)) frontier.add(cell);
                 }
             }
         }
-        for (int step = 2; step <= 32 && count > 0; step++) {
-            int[] next = new int[Math.max(1024, count)];
-            int nextCount = 0;
-            for (int i = 0; i < count; i++) {
-                int cell = frontier[i], y = cell / PLANE, column = cell % PLANE;
+        int begin = 0, end = frontier.count;
+        for (int step = 1; step < depth && begin < end; step++) {
+            int stop = end;
+            while (begin < stop) {
+                int cell = frontier.cells[begin++], y = cell / PLANE, column = cell % PLANE;
                 int x = column % WIDTH, z = column / WIDTH;
                 for (int direction = 0; direction < 6; direction++) {
                     int nx = x + DX[direction], ny = y + DY[direction], nz = z + DZ[direction];
                     if (nx < 0 || nx >= WIDTH || nz < 0 || nz >= WIDTH || ny < 0 || ny >= HEIGHT) continue;
                     int neighbourColumn = nz * WIDTH + nx;
-                    if (ny > source.top[neighbourColumn]) continue;
+                    if (ny >= floor(source, neighbourColumn)) continue;
                     int neighbour = ny * PLANE + neighbourColumn;
-                    if (source.solid.get(neighbour) || reached.get(neighbour)) continue;
-                    reached.set(neighbour);
-                    if (nextCount == next.length) next = Arrays.copyOf(next, nextCount * 2);
-                    next[nextCount++] = neighbour;
+                    if (!source.solid.get(neighbour)) frontier.add(neighbour);
                 }
             }
-            frontier = next;
-            count = nextCount;
+            end = frontier.count;
         }
-        return reached;
+        return frontier.reached;
     }
 
     private static void report(String label, Path output, Path input, BlockDefaults defaults,
-            Source source, BitSet reached) throws Exception {
+            Source source, BitSet reached, int depth) throws Exception {
         long present = 0, missing = 0, seam = 0, seamWithoutHeuristic = 0, chunk = 0, canopy = 0;
         List<String> seamExamples = new ArrayList<>(), chunkExamples = new ArrayList<>(), canopyExamples = new ArrayList<>();
         Inflater inflater = new Inflater();
@@ -154,7 +165,7 @@ public final class ShellDiagnostic {
                             int neighbourColumn = nz * WIDTH + nx, neighbour = ny * PLANE + neighbourColumn;
                             if (source.solid.get(neighbour) || source.water.get(cell) && source.water.get(neighbour)
                                     || source.lava.get(cell) && source.lava.get(neighbour)) continue;
-                            if (ny <= source.top[neighbourColumn] && !reached.get(neighbour)) continue;
+                            if (ny < floor(source, neighbourColumn) && !reached.get(neighbour)) continue;
                             missing++;
                             String example = "(" + (x - 512) + "," + (y - 64) + "," + (z - 512) + "," + DIRECTION[direction] + ")";
                             boolean regionSeam = direction == 0 && x == 512 || direction == 1 && x == 511
@@ -176,12 +187,13 @@ public final class ShellDiagnostic {
             }
         }
         inflater.end();
-        System.out.println(label + " present=" + present + " sky_visible_missing=" + missing
+        System.out.println(label + " depth=" + depth + " present=" + present + " reachable_missing=" + missing
                 + " region_seam=" + seam + " region_seam_without_heuristic=" + seamWithoutHeuristic
                 + " chunk_seam=" + chunk + " under_canopy=" + canopy);
         System.out.println(label + " region_seam_examples=" + seamExamples);
         System.out.println(label + " chunk_seam_examples=" + chunkExamples);
         System.out.println(label + " under_canopy_examples=" + canopyExamples);
+        if (depth <= 16 && missing != 0) throw new AssertionError("Reachable faces are missing: " + missing);
         if (seamWithoutHeuristic != 0) throw new AssertionError("Unexpected region seam faces are missing: " + seamWithoutHeuristic);
     }
 

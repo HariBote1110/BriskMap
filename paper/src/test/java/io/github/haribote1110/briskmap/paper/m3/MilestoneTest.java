@@ -31,6 +31,8 @@ class MilestoneTest {
         assertEquals(List.of("other"), changed.excludedWorlds());
         assertEquals(8123, ConfigLoader.load(Map.of("web.port", -1), message -> warnings.incrementAndGet()).webPort());
         assertEquals(1, warnings.get());
+        assertEquals(16, ConfigLoader.load(Map.of("extract.cave-depth", 32), message -> warnings.incrementAndGet()).options().caveDepth());
+        assertEquals(2, warnings.get());
     }
 
     @Test void perWorldHeightCuts() {
